@@ -18,8 +18,10 @@ export interface GameConfig {
   teams: TeamId[];
   /** D9: New Jersey launch, one zone. */
   timeZone: string;
-  /** D2: standard takeover multiplier for areas (ratings) and establishments (check-ins). */
+  /** D2: multiplier for stealing an establishment by check-ins (3x). Areas use areaTakeoverMultiplier. */
   takeoverMultiplier: number;
+  /** Multiplier for taking an owned area at month end (2x, decided 2026-11-21 after simulation). */
+  areaTakeoverMultiplier?: number;
   /** Q3/QA: the establishment owner's defense is its check-ins over this many days. */
   ownerDefenseWindowDays: number;
   /**
@@ -30,7 +32,7 @@ export interface GameConfig {
   challengerWindow: "month" | "rolling";
   /** Early turnover: holder keeps the area at month end with this share of the usual bar (embre: 1/2). */
   earlyTurnoverShare: number;
-  /** D5: Counterplate ladder start and step. Multiplier = min(takeoverMultiplier, start + step * transfers). */
+  /** Counterplate ladder start and step. Multiplier = min(area multiplier, start + step * transfers): 1x -> 1.5x -> 2x. */
   counterplateStart: number;
   counterplateStep: number;
   /** Counterplate vote: 24 h, 30% of eligible local members (confirmed rules). */
@@ -46,10 +48,11 @@ export const DEFAULT_CONFIG: GameConfig = {
   teams: ["team1", "team2", "team3"],
   timeZone: "America/New_York",
   takeoverMultiplier: 3,
+  areaTakeoverMultiplier: 2,
   ownerDefenseWindowDays: 30,
   challengerWindow: "month",
   earlyTurnoverShare: 0.5,
-  counterplateStart: 1.5,
+  counterplateStart: 1,
   counterplateStep: 0.5,
   voteHours: 24,
   voteShare: 0.3,
@@ -317,12 +320,16 @@ export class Game {
   /** Current multiplier a team needs to take an area, including any Counterplate advantage for `month`. */
   areaMultiplierFor(team: TeamId, areaId: string, month: string): number {
     const cp = this.counterplates.find((c) => c.areaId === areaId && c.team === team && c.status === "won" && c.evaluateMonth === month);
-    return cp ? this.ladder(cp) : this.config.takeoverMultiplier;
+    return cp ? this.ladder(cp) : this.areaMultiplier();
+  }
+
+  areaMultiplier(): number {
+    return this.config.areaTakeoverMultiplier ?? this.config.takeoverMultiplier;
   }
 
   ladder(cp: Counterplate): number {
-    const { counterplateStart, counterplateStep, takeoverMultiplier } = this.config;
-    return Math.min(takeoverMultiplier, counterplateStart + counterplateStep * cp.transfers);
+    const { counterplateStart, counterplateStep } = this.config;
+    return Math.min(this.areaMultiplier(), counterplateStart + counterplateStep * cp.transfers);
   }
 
   // ---------------------------------------------------------------- internals
@@ -410,7 +417,7 @@ export class Game {
         continue;
       }
       cp.transfers += 1;
-      if (cp.status === "won" && this.ladder(cp) >= this.config.takeoverMultiplier) this.setStatus(cp, "exhausted", at);
+      if (cp.status === "won" && this.ladder(cp) >= this.areaMultiplier()) this.setStatus(cp, "exhausted", at);
     }
     if (counterplateFor !== null) this.openCounterplate(area, counterplateFor, to, at);
   }
@@ -473,7 +480,7 @@ export class Game {
     if (score[cp.team] > score[cp.against]) {
       // Reduced bar applies at the next month-end evaluation after the battle (proposal 16).
       cp.evaluateMonth = monthKey(end, this.config.timeZone);
-      this.setStatus(cp, this.ladder(cp) >= this.config.takeoverMultiplier ? "exhausted" : "won", end);
+      this.setStatus(cp, this.ladder(cp) >= this.areaMultiplier() ? "exhausted" : "won", end);
     } else {
       this.setStatus(cp, "lost_battle", end);
     }
@@ -527,7 +534,7 @@ export class Game {
 
     if (early) {
       // Early-turnover holder keeps it only with 1/2 of the usual bar against the previous owner.
-      const need = bar(this.config.takeoverMultiplier * this.config.earlyTurnoverShare, count(early.previousOwner));
+      const need = bar(this.areaMultiplier() * this.config.earlyTurnoverShare, count(early.previousOwner));
       if (ownerCount < need) {
         // Neither side reached its bar: the area becomes ownerless (embre, 2026-11-21).
         area.owner = null;

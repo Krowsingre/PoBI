@@ -3,7 +3,7 @@
 //
 // Player behaviour here is invented for testing the rules, not a forecast.
 
-import { Game, type TeamId } from "../src/engine.ts";
+import { Game, type GameConfig, type TeamId } from "../src/engine.ts";
 import { HOUR_MS, localMidnight, monthKey } from "../src/time.ts";
 
 const TZ = "America/New_York";
@@ -32,6 +32,7 @@ export interface Scenario {
   voteChance: number;
   months: number;
   seed: number;
+  config?: Partial<GameConfig>;
 }
 
 export interface Summary {
@@ -49,7 +50,7 @@ export interface Summary {
 export function simulate(s: Scenario): Summary {
   const rand = rng(s.seed);
   const start = localMidnight(2026, 11, 1, TZ);
-  const g = new Game(start);
+  const g = new Game(start, s.config);
   const ests = Array.from({ length: s.establishments }, (_, i) => `e${i}`);
   for (const e of ests) g.addEstablishment(e, "area");
   const teams: TeamId[] = g.config.teams;
