@@ -1,4 +1,4 @@
-"""Build the New Jersey food and drink catalogue bundled with the iOS app.
+"""Build the New Jersey food and drink catalogue (including convenience stores like Wawa) bundled with the iOS app.
 
 Reads Overture Maps Places (CDLA-Permissive-2.0 / ODbL sources, see
 https://docs.overturemaps.org/attribution/) straight from Overture's public S3
@@ -22,6 +22,22 @@ MIN_CONFIDENCE = 0.5
 # Bounding box around New Jersey. Rows are then narrowed to the NJ address region.
 XMIN, XMAX, YMIN, YMAX = -75.6, -73.88, 38.92, 41.37
 OUT = Path(__file__).resolve().parent.parent / "ios" / "PoBI" / "Resources" / "nj_places.tsv"
+
+
+# Food-selling convenience chains that Overture sometimes files under gas stations.
+FOOD_CHAINS = ("wawa", "quickchek", "quick chek", "7-eleven", "royal farms", "sheetz")
+
+
+def counts_as_food_place(name: str, hierarchy: list) -> bool:
+    """Food and drink places, plus convenience stores such as Wawa (embre, 2026-11-21)."""
+    top = hierarchy[:1]
+    if top == ["food_and_drink"]:
+        return True
+    if hierarchy[:2] == ["shopping", "convenience_store"]:
+        return True
+    if hierarchy[:2] == ["travel_and_transportation", "fueling_station"]:
+        return any(chain in name.lower() for chain in FOOD_CHAINS)
+    return False
 
 
 def humanize(slug: str) -> str:
@@ -52,20 +68,24 @@ def main() -> None:
         if address.get("region") not in ("NJ", "US-NJ"):
             continue
         taxonomy = r["taxonomy"] or {}
-        if (taxonomy.get("hierarchy") or [None])[0] != "food_and_drink":
+        name = clean((r["names"] or {}).get("primary"))
+        if not counts_as_food_place(name, taxonomy.get("hierarchy") or []):
             continue
         if r["operating_status"] == "permanently_closed":
             continue
         if (r["confidence"] or 0) < MIN_CONFIDENCE:
             continue
-        name = clean((r["names"] or {}).get("primary"))
         if not name or r["id"] in seen:
             continue
         seen.add(r["id"])
         b = r["bbox"]
         lat = (b["ymin"] + b["ymax"]) / 2
         lon = (b["xmin"] + b["xmax"]) / 2
-        category = humanize(taxonomy.get("primary") or "restaurant")
+        hierarchy = taxonomy.get("hierarchy") or []
+        if hierarchy[:1] == ["travel_and_transportation"]:
+            category = "Convenience store"  # a food chain filed as a gas station
+        else:
+            category = humanize(taxonomy.get("primary") or "restaurant")
         town = clean(address.get("locality")).title()
         rows.append((r["id"], name, category, town, f"{lat:.5f}", f"{lon:.5f}"))
 
