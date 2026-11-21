@@ -19,6 +19,17 @@ struct PlaceDetailView: View {
                 if let distance = location.distanceText(to: place) {
                     LabeledContent("Distance", value: distance)
                 }
+                if LocationManager.testingAllowed {
+                    Button {
+                        location.setTestLocation(at: place)
+                    } label: {
+                        Label(
+                            location.testLocation?.name == place.name ? "Test: pretending you're here" : "Test: pretend I'm here",
+                            systemImage: "location.viewfinder"
+                        )
+                    }
+                    .tint(.orange)
+                }
                 NavigationLink {
                     DirectionsView(place: place)
                 } label: {

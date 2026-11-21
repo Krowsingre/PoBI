@@ -38,6 +38,10 @@ struct MapScreen: View {
         NavigationStack {
             Map(position: $position) {
                 UserAnnotation()
+                if let test = location.testLocation {
+                    Marker("Test location", systemImage: "location.viewfinder", coordinate: test.coordinate)
+                        .tint(.orange)
+                }
                 ForEach(visible) { place in
                     Annotation(place.name, coordinate: place.coordinate) {
                         Button {
@@ -92,6 +96,7 @@ struct MapScreen: View {
         if !store.catalogLoaded { return "Loading places…" }
         if waitingForLocation { return "Finding your location…" }
         if zoomedOutTooFar { return "Zoom in to see places" }
+        if let test = location.testLocation { return "Test location: \(test.name)" }
         if region != nil && visible.isEmpty { return "No places in this part of the map" }
         return nil
     }
