@@ -164,19 +164,19 @@ describe("areas: new ratings at month end (D7)", () => {
     return g;
   }
 
-  test("taking an owned area needs 3x the owner's new ratings that month (D2)", () => {
+  test("taking an owned area needs 2x the owner's new ratings that month", () => {
     const g = ownedArea();
     const as = players(g, "team1", 2);
     const bs = players(g, "team2", 6);
     for (const a of as) mustOk(g.rate(a, "e2", "plate", 1, t(2026, 12, 5)));
-    for (const b of bs.slice(0, 5)) mustOk(g.rate(b, "e3", "plate", 1, t(2026, 12, 6)));
+    for (const b of bs.slice(0, 3)) mustOk(g.rate(b, "e3", "plate", 1, t(2026, 12, 6)));
     const g2 = ownedArea();
     players(g2, "team1", 2).forEach((a) => mustOk(g2.rate(a, "e2", "plate", 1, t(2026, 12, 5))));
-    players(g2, "team2", 6).forEach((b) => mustOk(g2.rate(b, "e3", "plate", 1, t(2026, 12, 6))));
+    players(g2, "team2", 4).forEach((b) => mustOk(g2.rate(b, "e3", "plate", 1, t(2026, 12, 6))));
     g.advanceTo(t(2027, 1, 1, 0));
     g2.advanceTo(t(2027, 1, 1, 0));
-    assert.equal(g.areas.get("a1")!.owner, "team1", "5 is short of 3 x 2");
-    assert.equal(g2.areas.get("a1")!.owner, "team2", "6 meets 3 x 2");
+    assert.equal(g.areas.get("a1")!.owner, "team1", "3 is short of 2 x 2");
+    assert.equal(g2.areas.get("a1")!.owner, "team2", "4 meets 2 x 2");
   });
 
   test("an owner with 0 new ratings loses to 1 (D6)", () => {

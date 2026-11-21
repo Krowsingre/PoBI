@@ -35,7 +35,7 @@ describe("early turnover", () => {
     assert.equal(cp.votesNeeded, 1);
   });
 
-  test("holder keeps the area with 1/2 of the usual bar", () => {
+  test("holder keeps the area with 1/2 of the usual bar (1x the previous owner)", () => {
     const { g } = earlyTurnover();
     // team2 has 3 December ratings, team1 has 0: holder needs 1.
     g.advanceTo(t(2027, 1, 1, 0));
@@ -45,16 +45,16 @@ describe("early turnover", () => {
 
   test("if neither side reaches its bar the area becomes ownerless", () => {
     const { g } = earlyTurnover();
-    // team1 rates 4: holder needs ceil(1.5 x 4) = 6 (has 3); team1 needs 3 x 3 = 9 (has 4).
+    // team1 rates 4: holder needs 1 x 4 = 4 (has 3); team1 needs 2 x 3 = 6 (has 4).
     players(g, "team1", 4).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 10))));
     g.advanceTo(t(2027, 1, 1, 0));
     assert.equal(g.areas.get("a1")!.owner, null);
     assert.ok(g.events.some((e) => e.type === "area_ownerless"));
   });
 
-  test("the previous owner reclaims at month end with 3x the holder's ratings", () => {
+  test("the previous owner reclaims at month end with 2x the holder's ratings", () => {
     const { g } = earlyTurnover();
-    players(g, "team1", 9).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 10))));
+    players(g, "team1", 6).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 10))));
     g.advanceTo(t(2027, 1, 1, 0));
     assert.equal(g.areas.get("a1")!.owner, "team1");
   });
@@ -112,26 +112,36 @@ describe("Counterplate", () => {
     assert.equal(g.counterplates[0].status, "no_eligible_voters");
   });
 
-  test("a won Counterplate lowers the month-end bar to 1.5x", () => {
+  test("a won Counterplate lowers the month-end bar to 1x", () => {
     const { g, cp } = wonCounterplate();
-    // team2 has 3 December ratings: 1.5 x 3 = 4.5, rounded up to 5 (instead of 9).
-    players(g, "team1", 5).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 20))));
+    // team2 has 3 December ratings: matching them is enough (instead of 6).
+    players(g, "team1", 3).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 20))));
     g.advanceTo(t(2027, 1, 1, 0));
     assert.equal(g.areas.get("a1")!.owner, "team1");
     assert.equal(cp.status, "reclaimed");
   });
 
-  test("one rating short of the reduced bar leaves the area ownerless", () => {
+  test("one rating short of the reduced bar: the holder keeps it", () => {
     const { g, cp } = wonCounterplate();
-    players(g, "team1", 4).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 20))));
+    // team1 has 2: short of 1 x 3. Holder needs 1 x 2 and has 3.
+    players(g, "team1", 2).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 20))));
     g.advanceTo(t(2027, 1, 1, 0));
-    assert.equal(g.areas.get("a1")!.owner, null);
+    assert.equal(g.areas.get("a1")!.owner, "team2");
     assert.equal(cp.status, "expired");
   });
 
-  test("each later transfer raises the bar by 0.5x (D5 ladder)", () => {
+  test("a tie between holder and Counterplate winner goes to the Counterplate winner", () => {
+    const { g, cp } = wonCounterplate();
+    // Both have 3: team1 meets 1 x 3, and the holder also meets its own bar.
+    players(g, "team1", 3).forEach((p) => mustOk(g.rate(p, "e2", "plate", 1, t(2026, 12, 20))));
+    g.advanceTo(t(2027, 1, 1, 0));
+    assert.equal(g.areas.get("a1")!.owner, "team1");
+    assert.equal(cp.status, "reclaimed");
+  });
+
+  test("each later transfer raises the bar by 0.5x (ladder 1x -> 1.5x -> 2x)", () => {
     const { g } = wonCounterplate();
-    assert.equal(g.areaMultiplierFor("team1", "a1", "2026-12"), 1.5);
+    assert.equal(g.areaMultiplierFor("team1", "a1", "2026-12"), 1);
     // team3 steals e1 from team2 (4 check-ins in 30 days, so 12 needed): area changes hands again.
     players(g, "team3", 12).forEach((p) => {
       mustOk(g.rate(p, "e1", "plate", 1, t(2026, 12, 8)));
@@ -140,7 +150,7 @@ describe("Counterplate", () => {
     const area = g.areas.get("a1")!;
     assert.equal(area.owner, "team3");
     assert.equal(area.earlyTurnover?.previousOwner, "team1");
-    assert.equal(g.areaMultiplierFor("team1", "a1", "2026-12"), 2);
-    assert.equal(g.areaMultiplierFor("team2", "a1", "2026-12"), 3, "no advantage for the provisional holder");
+    assert.equal(g.areaMultiplierFor("team1", "a1", "2026-12"), 1.5);
+    assert.equal(g.areaMultiplierFor("team2", "a1", "2026-12"), 2, "no advantage for the provisional holder");
   });
 });
