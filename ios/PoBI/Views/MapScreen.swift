@@ -21,6 +21,15 @@ struct MapScreen: View {
     /// Beyond this zoom-out (about 17 km top to bottom) pins are hidden.
     private let maxSpan = 0.15
 
+    /// Location is allowed but no position has arrived yet, so the map isn't showing where you are.
+    private var waitingForLocation: Bool {
+        guard !centeredOnUser else { return false }
+        switch location.authorization {
+        case .authorizedWhenInUse, .authorizedAlways, .notDetermined: return true
+        default: return false
+        }
+    }
+
     private var zoomedOutTooFar: Bool {
         (region?.span.latitudeDelta ?? 0) > maxSpan
     }
@@ -81,8 +90,9 @@ struct MapScreen: View {
 
     private var hint: String? {
         if !store.catalogLoaded { return "Loading places…" }
+        if waitingForLocation { return "Finding your location…" }
         if zoomedOutTooFar { return "Zoom in to see places" }
-        if region != nil && visible.isEmpty { return "No places here yet" }
+        if region != nil && visible.isEmpty { return "No places in this part of the map" }
         return nil
     }
 
