@@ -88,6 +88,8 @@ struct Rating: Identifiable, Codable, Hashable {
     let verdict: Verdict
     let stars: Int
     let date: Date
+    /// True when the place didn't allow food photos and the photo shows the storefront instead (D16).
+    var storefrontPhoto: Bool? = nil
 }
 
 struct CheckIn: Identifiable, Codable, Hashable {
@@ -100,12 +102,24 @@ enum CheckInStatus: Equatable {
     case allowed
     case needsRating
     case alreadyToday
+    /// Location is off or not known yet.
+    case noLocation
+    /// The phone's GPS fix is too rough to tell whether you're at the place.
+    case roughLocation
+    /// You're farther than the check-in reach. Carries the distance in metres.
+    case tooFar(Int)
 
     var hint: String? {
         switch self {
         case .allowed: return nil
         case .needsRating: return "Rate this place first. After that you can check in once a day."
         case .alreadyToday: return "You've checked in here today. Come back tomorrow."
+        case .noLocation: return "Turn on location to check in. You need to be at the place."
+        case .roughLocation: return "Waiting for a better GPS signal. Step outside or wait a moment."
+        case .tooFar(let meters):
+            let away = Measurement(value: Double(meters), unit: UnitLength.meters)
+                .formatted(.measurement(width: .abbreviated, usage: .road))
+            return "You're \(away) away. Check in when you're at the place, within \(GameStore.checkInReachText)."
         }
     }
 }
@@ -115,13 +129,15 @@ enum GameError: LocalizedError {
     case notRated
     case alreadyCheckedInToday
     case missingPhotos
+    case notHere
 
     var errorDescription: String? {
         switch self {
         case .alreadyRated: return "You've already rated this place."
         case .notRated: return "Rate this place before checking in."
         case .alreadyCheckedInToday: return "You've already checked in here today."
-        case .missingPhotos: return "Add a receipt photo and a dish photo."
+        case .missingPhotos: return "Take a receipt photo and a food or storefront photo."
+        case .notHere: return "You need to be at the place to check in."
         }
     }
 }

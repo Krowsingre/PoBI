@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProfileScreen: View {
     @EnvironmentObject private var store: GameStore
+    @EnvironmentObject private var allergies: AllergyStore
     @State private var confirmReset = false
 
     var body: some View {
@@ -14,6 +15,20 @@ struct ProfileScreen: View {
                             Text(team.name)
                         }
                     }
+                }
+                Section {
+                    NavigationLink {
+                        AllergiesView()
+                    } label: {
+                        LabeledContent {
+                            Text(allergies.all.isEmpty ? "None added" : allergies.all.joined(separator: ", "))
+                                .lineLimit(1)
+                        } label: {
+                            Label("My allergies", systemImage: "allergens")
+                        }
+                    }
+                } footer: {
+                    Text("Kept only on this phone.")
                 }
                 Section("Your stats") {
                     LabeledContent("Places rated", value: "\(store.ratings.count)")
@@ -38,7 +53,7 @@ struct ProfileScreen: View {
                 }
             }
             .navigationTitle("Profile")
-            .confirmationDialog("Delete your ratings, check-ins and team choice on this phone?", isPresented: $confirmReset, titleVisibility: .visible) {
+            .confirmationDialog("Delete your ratings, check-ins and team choice on this phone? Your allergy list is kept.", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Reset", role: .destructive) { store.reset() }
             }
         }

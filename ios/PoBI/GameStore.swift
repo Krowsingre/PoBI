@@ -21,7 +21,7 @@ final class GameStore: ObservableObject {
     static let defaultCenter = CLLocationCoordinate2D(latitude: 40.22, longitude: -74.55)
 
     /// Every game day, week and month runs on New Jersey time.
-    static let calendar: Calendar = {
+    nonisolated static let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .current
         return calendar
@@ -63,28 +63,48 @@ final class GameStore: ObservableObject {
         checkIns.filter { $0.placeID == place.id }
     }
 
-    func checkInStatus(for place: Place, now: Date = .now) -> CheckInStatus {
+    /// You can check in only within this distance of a place's pin, like Pokémon GO (D12).
+    nonisolated static let checkInReach: CLLocationDistance = 80
+    /// A GPS fix rougher than this can't tell whether you're at the place.
+    static let worstUsableAccuracy: CLLocationAccuracy = 100
+
+    nonisolated static var checkInReachText: String {
+        Measurement(value: checkInReach, unit: UnitLength.meters)
+            .formatted(.measurement(width: .abbreviated, usage: .road))
+    }
+
+    func checkInStatus(for place: Place, from here: CLLocation?, now: Date = .now) -> CheckInStatus {
         guard rating(for: place) != nil else { return .needsRating }
         let today = checkIns(for: place).contains { Self.calendar.isDate($0.date, inSameDayAs: now) }
-        return today ? .alreadyToday : .allowed
+        if today { return .alreadyToday }
+        // A fix older than two minutes may be from somewhere else (for example, location was turned off after).
+        guard let here, now.timeIntervalSince(here.timestamp) <= 120 else { return .noLocation }
+        guard here.horizontalAccuracy >= 0, here.horizontalAccuracy <= Self.worstUsableAccuracy else { return .roughLocation }
+        let distance = here.distance(from: place.location)
+        if distance > Self.checkInReach { return .tooFar(Int(distance.rounded())) }
+        return .allowed
     }
 
     // MARK: Actions
 
-    func rate(_ place: Place, verdict: Verdict, stars: Int, dishPhoto: UIImage) throws {
+    func rate(_ place: Place, verdict: Verdict, stars: Int, dishPhoto: UIImage, storefront: Bool = false) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
         guard let data = dishPhoto.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
-        let rating = Rating(id: UUID(), placeID: place.id, verdict: verdict, stars: min(max(stars, 1), 3), date: .now)
+        let rating = Rating(
+            id: UUID(), placeID: place.id, verdict: verdict, stars: min(max(stars, 1), 3), date: .now,
+            storefrontPhoto: storefront ? true : nil
+        )
         try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
         try data.write(to: Self.photoURL(for: rating))
         ratings.append(rating)
         save()
     }
 
-    func checkIn(at place: Place) throws {
-        switch checkInStatus(for: place) {
+    func checkIn(at place: Place, from here: CLLocation?) throws {
+        switch checkInStatus(for: place, from: here) {
         case .needsRating: throw GameError.notRated
         case .alreadyToday: throw GameError.alreadyCheckedInToday
+        case .noLocation, .roughLocation, .tooFar: throw GameError.notHere
         case .allowed: break
         }
         checkIns.append(CheckIn(id: UUID(), placeID: place.id, date: .now))

@@ -11,10 +11,14 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         super.init()
         authorization = manager.authorizationStatus
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.desiredAccuracy = kCLLocationAccuracyBest
     }
 
     func start() {
+        // Use the phone's last known position right away while a fresh fix comes in.
+        if location == nil, let cached = manager.location {
+            location = cached
+        }
         switch manager.authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()
@@ -36,6 +40,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             self.authorization = status
             if status == .authorizedWhenInUse || status == .authorizedAlways {
                 manager.startUpdatingLocation()
+            } else {
+                // Without permission, an old position must not count as where you are.
+                self.location = nil
             }
         }
     }

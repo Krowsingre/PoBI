@@ -4,12 +4,14 @@ import SwiftUI
 struct PoBIApp: App {
     @StateObject private var store = GameStore()
     @StateObject private var location = LocationManager()
+    @StateObject private var allergies = AllergyStore()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(location)
+                .environmentObject(allergies)
         }
     }
 }
@@ -17,6 +19,7 @@ struct PoBIApp: App {
 struct RootView: View {
     @EnvironmentObject private var store: GameStore
     @EnvironmentObject private var location: LocationManager
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -36,5 +39,8 @@ struct RootView: View {
             }
         }
         .onAppear { location.start() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { location.start() }
+        }
     }
 }
