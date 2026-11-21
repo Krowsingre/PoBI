@@ -77,7 +77,8 @@ final class GameStore: ObservableObject {
         guard rating(for: place) != nil else { return .needsRating }
         let today = checkIns(for: place).contains { Self.calendar.isDate($0.date, inSameDayAs: now) }
         if today { return .alreadyToday }
-        guard let here else { return .noLocation }
+        // A fix older than two minutes may be from somewhere else (for example, location was turned off after).
+        guard let here, now.timeIntervalSince(here.timestamp) <= 120 else { return .noLocation }
         guard here.horizontalAccuracy >= 0, here.horizontalAccuracy <= Self.worstUsableAccuracy else { return .roughLocation }
         let distance = here.distance(from: place.location)
         if distance > Self.checkInReach { return .tooFar(Int(distance.rounded())) }

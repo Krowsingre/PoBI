@@ -40,6 +40,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
             self.authorization = status
             if status == .authorizedWhenInUse || status == .authorizedAlways {
                 manager.startUpdatingLocation()
+            } else {
+                // Without permission, an old position must not count as where you are.
+                self.location = nil
             }
         }
     }
