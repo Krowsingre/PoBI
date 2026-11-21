@@ -54,7 +54,7 @@ struct PlaceDetailView: View {
                     Button {
                         showRate = true
                     } label: {
-                        Label("Rate it", systemImage: "fork.knife")
+                        Label(store.draft(for: place) == nil ? "Rate it" : "Finish your rating", systemImage: "fork.knife")
                     }
                 }
                 Button {

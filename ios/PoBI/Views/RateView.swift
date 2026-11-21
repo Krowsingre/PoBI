@@ -3,9 +3,11 @@ import SwiftUI
 /// An original rating: receipt photo, dish photo, Plate It or Break It, one to three stars.
 /// You can rate from anywhere (D11), but the receipt must be dated within the last 7 days,
 /// and both photos are taken with the app's camera (D13). Where food photos aren't allowed,
-/// a storefront photo stands in (D16).
+/// a storefront photo stands in (D16). That photo must be taken at the place, and can be finished
+/// into a rating from anywhere within 7 days (D17).
 struct RateView: View {
     @EnvironmentObject private var store: GameStore
+    @EnvironmentObject private var location: LocationManager
     @Environment(\.dismiss) private var dismiss
     let place: Place
 
@@ -17,6 +19,7 @@ struct RateView: View {
     @State private var shooting: Shot?
     @State private var receiptCheck: ReceiptReader.Result?
     @State private var checkingReceipt = false
+    /// The food or storefront photo, taken at the place and kept as a draft for 7 days (D17).
     @State private var dishImage: UIImage?
     /// The place doesn't allow food photos, so a photo of the outside or sign stands in (D16).
     @State private var noPhotosAllowed = false
@@ -29,7 +32,9 @@ struct RateView: View {
         return false
     }
 
-    private var canSubmit: Bool { receiptOK && dishImage != nil && !checkingReceipt }
+    private var canSubmit: Bool { receiptOK && dishImage != nil && store.draft(for: place) != nil && !checkingReceipt }
+
+    private var presence: CheckInStatus { store.presence(at: place, from: location.location) }
 
     var body: some View {
         NavigationStack {
@@ -56,32 +61,41 @@ struct RateView: View {
                 }
 
                 Section {
-                    Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
-                        .onChange(of: noPhotosAllowed) { dishImage = nil }
-                    Button {
-                        shooting = .dish
-                    } label: {
-                        Label(
-                            noPhotosAllowed
-                                ? (dishImage == nil ? "Take storefront photo" : "Retake storefront photo")
-                                : (dishImage == nil ? "Take food photo" : "Retake food photo"),
-                            systemImage: noPhotosAllowed ? "storefront" : "camera"
-                        )
-                    }
-                    .disabled(!CameraPicker.isAvailable)
-                    if let dishImage {
+                    if let draft = store.draft(for: place), let dishImage {
                         Image(uiImage: dishImage)
                             .resizable()
                             .scaledToFit()
                             .frame(maxHeight: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Label(
+                            "\(draft.storefront ? "Storefront" : "Food") photo taken here \(draft.takenAt.formatted(.relative(presentation: .named)))",
+                            systemImage: "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(.green)
+                        // The saved photo is only replaced once a new one is taken at the place.
+                        Button("Retake photo") { shooting = .dish }
+                            .disabled(!CameraPicker.isAvailable || presence != .allowed)
+                    } else {
+                        Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
+                        Button {
+                            shooting = .dish
+                        } label: {
+                            Label(
+                                noPhotosAllowed ? "Take storefront photo" : "Take food photo",
+                                systemImage: noPhotosAllowed ? "storefront" : "camera"
+                            )
+                        }
+                        .disabled(!CameraPicker.isAvailable || presence != .allowed)
+                        if let hint = photoHint {
+                            Text(hint).font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
                 } header: {
                     Text(noPhotosAllowed ? "The place" : "Your food")
                 } footer: {
-                    if noPhotosAllowed {
-                        Text("Photograph the outside or the sign instead. You can take it after you leave. The rating counts the same.")
-                    }
+                    Text(noPhotosAllowed
+                         ? "Photograph the outside or the sign, at the place. The rating counts the same."
+                         : "Take this photo at the place. It's kept for 7 days, so you can finish the rating after you leave.")
                 }
 
                 Section("Your verdict") {
@@ -120,11 +134,17 @@ struct RateView: View {
                         .disabled(!canSubmit)
                 }
             }
+            .onAppear {
+                if let draft = store.draft(for: place) {
+                    dishImage = store.draftPhoto(for: place)
+                    noPhotosAllowed = draft.storefront
+                }
+            }
             .fullScreenCover(item: $shooting) { shot in
                 CameraPicker { image in
                     switch shot {
                     case .receipt: checkReceipt(image)
-                    case .dish: dishImage = ImageResizer.downscale(image)
+                    case .dish: saveDish(image)
                     }
                 }
                 .ignoresSafeArea()
@@ -157,6 +177,29 @@ struct RateView: View {
         }
     }
 
+    /// Why the food or storefront photo can't be taken right now, if it can't.
+    private var photoHint: String? {
+        switch presence {
+        case .allowed: return nil
+        case .tooFar(let meters):
+            let away = Measurement(value: Double(meters), unit: UnitLength.meters)
+                .formatted(.measurement(width: .abbreviated, usage: .road))
+            return "You're \(away) away. Take this photo at the place, within \(GameStore.checkInReachText)."
+        default: return presence.hint
+        }
+    }
+
+    private func saveDish(_ image: UIImage) {
+        let photo = ImageResizer.downscale(image)
+        do {
+            try store.savePhotoDraft(photo, for: place, storefront: noPhotosAllowed, from: location.location)
+            dishImage = photo
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     private func checkReceipt(_ image: UIImage) {
         receiptCheck = nil
         checkingReceipt = true
@@ -169,12 +212,12 @@ struct RateView: View {
     }
 
     private func submit() {
-        guard canSubmit, let dishImage else {
+        guard canSubmit else {
             error = GameError.missingPhotos.localizedDescription
             return
         }
         do {
-            try store.rate(place, verdict: verdict, stars: stars, dishPhoto: dishImage, storefront: noPhotosAllowed)
+            try store.rate(place, verdict: verdict, stars: stars)
             dismiss()
         } catch {
             self.error = error.localizedDescription

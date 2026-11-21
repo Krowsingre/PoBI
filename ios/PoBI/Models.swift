@@ -92,6 +92,15 @@ struct Rating: Identifiable, Codable, Hashable {
     var storefrontPhoto: Bool? = nil
 }
 
+/// A food or storefront photo taken at the place, kept so the rating can be finished later (D17).
+struct PhotoDraft: Codable, Hashable {
+    let placeID: String
+    let takenAt: Date
+    let storefront: Bool
+    /// Distance from the place's pin when the photo was taken, in metres.
+    let distance: Double
+}
+
 struct CheckIn: Identifiable, Codable, Hashable {
     let id: UUID
     let placeID: String
@@ -114,7 +123,7 @@ enum CheckInStatus: Equatable {
         case .allowed: return nil
         case .needsRating: return "Rate this place first. After that you can check in once a day."
         case .alreadyToday: return "You've checked in here today. Come back tomorrow."
-        case .noLocation: return "Turn on location to check in. You need to be at the place."
+        case .noLocation: return "Turn on location. You need to be at the place."
         case .roughLocation: return "Waiting for a better GPS signal. Step outside or wait a moment."
         case .tooFar(let meters):
             let away = Measurement(value: Double(meters), unit: UnitLength.meters)
@@ -130,6 +139,7 @@ enum GameError: LocalizedError {
     case alreadyCheckedInToday
     case missingPhotos
     case notHere
+    case photoNotAtPlace
 
     var errorDescription: String? {
         switch self {
@@ -138,6 +148,7 @@ enum GameError: LocalizedError {
         case .alreadyCheckedInToday: return "You've already checked in here today."
         case .missingPhotos: return "Take a receipt photo and a food or storefront photo."
         case .notHere: return "You need to be at the place to check in."
+        case .photoNotAtPlace: return "Take this photo at the place, within \(GameStore.checkInReachText)."
         }
     }
 }
