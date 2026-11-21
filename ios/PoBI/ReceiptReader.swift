@@ -21,8 +21,8 @@ enum ReceiptReader {
 
     static func check(_ image: UIImage, now: Date = .now) async -> Result {
         let lines = await recognizeText(in: image)
-        let dates = lines.flatMap { dates(in: $0, now: now) }
-        return evaluate(dates, now: now)
+        let found = lines.flatMap { Self.dates(in: $0, now: now) }
+        return evaluate(found, now: now)
     }
 
     static func evaluate(_ dates: [Date], now: Date) -> Result {
