@@ -19,6 +19,11 @@ struct PlaceDetailView: View {
                 if let distance = location.distanceText(to: place) {
                     LabeledContent("Distance", value: distance)
                 }
+                NavigationLink {
+                    DirectionsView(place: place)
+                } label: {
+                    Label("Walking directions", systemImage: "figure.walk")
+                }
             }
 
             Section("Your visit") {

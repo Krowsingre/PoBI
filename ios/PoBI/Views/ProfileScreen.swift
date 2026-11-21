@@ -22,7 +22,10 @@ struct ProfileScreen: View {
                     LabeledContent("Check-ins", value: "\(store.checkIns.count)")
                 }
                 Section {
-                    Text("This is an early test build. The places are made-up samples until the real New Jersey list is connected. Team ownership, takeovers and Counterplate arrive with the game server.")
+                    Text("This is an early test build. Your ratings and check-ins stay on this phone. Team ownership, takeovers and Counterplate arrive with the game server.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Place data: Overture Maps Foundation, under CDLA Permissive 2.0 and the licenses of its sources. Maps and walking routes: Apple Maps.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } header: {
