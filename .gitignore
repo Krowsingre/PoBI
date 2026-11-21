@@ -5,3 +5,5 @@ xcuserdata/
 DerivedData/
 build/
 .env
+ios/PoBI.xcodeproj/
+ios/PoBI/Info.plist
