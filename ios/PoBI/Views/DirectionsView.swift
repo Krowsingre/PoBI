@@ -16,7 +16,7 @@ struct DirectionsView: View {
             Map(position: $position) {
                 UserAnnotation()
                 Marker(place.name, systemImage: "fork.knife", coordinate: place.coordinate)
-                    .tint(.accentColor)
+                    .tint(Color.accentColor)
                 if let route {
                     MapPolyline(route.polyline)
                         .stroke(.blue, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
