@@ -12,6 +12,8 @@ final class GameStore: ObservableObject {
     }
     @Published private(set) var ratings: [Rating] = []
     @Published private(set) var checkIns: [CheckIn] = []
+    /// Food or storefront photos taken at a place and not yet used in a rating, by place ID.
+    @Published private(set) var drafts: [String: PhotoDraft] = [:]
 
     /// The bundled New Jersey catalogue. It loads in the background at launch.
     @Published private(set) var catalog: PlaceCatalog = .empty
@@ -33,6 +35,7 @@ final class GameStore: ObservableObject {
         var team: Team?
         var ratings: [Rating]
         var checkIns: [CheckIn]
+        var drafts: [String: PhotoDraft]?
     }
 
     init() {
@@ -41,7 +44,9 @@ final class GameStore: ObservableObject {
             team = saved.team
             ratings = saved.ratings
             checkIns = saved.checkIns
+            drafts = saved.drafts ?? [:]
         }
+        dropExpiredDrafts()
         Task {
             let catalog = await Task.detached(priority: .userInitiated) { PlaceCatalog.loadBundled() }.value
             self.catalog = catalog
@@ -77,6 +82,12 @@ final class GameStore: ObservableObject {
         guard rating(for: place) != nil else { return .needsRating }
         let today = checkIns(for: place).contains { Self.calendar.isDate($0.date, inSameDayAs: now) }
         if today { return .alreadyToday }
+        return presence(at: place, from: here, now: now)
+    }
+
+    /// Whether you're at the place right now: a fresh, accurate fix within the check-in reach.
+    /// Used for check-ins (D12) and for food and storefront photos (D17).
+    func presence(at place: Place, from here: CLLocation?, now: Date = .now) -> CheckInStatus {
         // A fix older than two minutes may be from somewhere else (for example, location was turned off after).
         guard let here, now.timeIntervalSince(here.timestamp) <= 120 else { return .noLocation }
         guard here.horizontalAccuracy >= 0, here.horizontalAccuracy <= Self.worstUsableAccuracy else { return .roughLocation }
@@ -87,16 +98,63 @@ final class GameStore: ObservableObject {
 
     // MARK: Actions
 
-    func rate(_ place: Place, verdict: Verdict, stars: Int, dishPhoto: UIImage, storefront: Bool = false) throws {
+    /// Saves a food or storefront photo taken at the place. It's kept for 7 days so you can
+    /// finish the rating after you leave (D17).
+    func savePhotoDraft(_ photo: UIImage, for place: Place, storefront: Bool, from here: CLLocation?) throws {
+        guard presence(at: place, from: here) == .allowed, let here else { throw GameError.photoNotAtPlace }
+        guard let data = photo.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
+        try FileManager.default.createDirectory(at: Self.draftsDirectory, withIntermediateDirectories: true)
+        try data.write(to: Self.draftURL(for: place.id))
+        drafts[place.id] = PhotoDraft(
+            placeID: place.id, takenAt: .now, storefront: storefront,
+            distance: here.distance(from: place.location)
+        )
+        save()
+    }
+
+    func draft(for place: Place, now: Date = .now) -> PhotoDraft? {
+        guard let draft = drafts[place.id], !isExpired(draft, now: now) else { return nil }
+        return draft
+    }
+
+    func draftPhoto(for place: Place) -> UIImage? {
+        guard draft(for: place) != nil else { return nil }
+        return UIImage(contentsOfFile: Self.draftURL(for: place.id).path(percentEncoded: false))
+    }
+
+    func discardDraft(for place: Place) {
+        drafts[place.id] = nil
+        try? FileManager.default.removeItem(at: Self.draftURL(for: place.id))
+        save()
+    }
+
+    /// Finishes a rating from the photo taken at the place. Works from anywhere within 7 days.
+    func rate(_ place: Place, verdict: Verdict, stars: Int) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
-        guard let data = dishPhoto.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
+        guard let draft = draft(for: place), let photo = draftPhoto(for: place),
+              let data = photo.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
         let rating = Rating(
             id: UUID(), placeID: place.id, verdict: verdict, stars: min(max(stars, 1), 3), date: .now,
-            storefrontPhoto: storefront ? true : nil
+            storefrontPhoto: draft.storefront ? true : nil
         )
         try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
         try data.write(to: Self.photoURL(for: rating))
         ratings.append(rating)
+        discardDraft(for: place)
+    }
+
+    private func isExpired(_ draft: PhotoDraft, now: Date) -> Bool {
+        let calendar = Self.calendar
+        guard let limit = calendar.date(byAdding: .day, value: ReceiptReader.maxAgeDays + 1,
+                                        to: calendar.startOfDay(for: draft.takenAt)) else { return true }
+        return now >= limit
+    }
+
+    private func dropExpiredDrafts() {
+        for (placeID, draft) in drafts where isExpired(draft, now: .now) {
+            drafts[placeID] = nil
+            try? FileManager.default.removeItem(at: Self.draftURL(for: placeID))
+        }
         save()
     }
 
@@ -114,7 +172,9 @@ final class GameStore: ObservableObject {
     func reset() {
         ratings = []
         checkIns = []
+        drafts = [:]
         try? FileManager.default.removeItem(at: Self.photosDirectory)
+        try? FileManager.default.removeItem(at: Self.draftsDirectory)
         team = nil
     }
 
@@ -122,6 +182,14 @@ final class GameStore: ObservableObject {
 
     static var photosDirectory: URL {
         URL.documentsDirectory.appending(path: "dish-photos", directoryHint: .isDirectory)
+    }
+
+    static var draftsDirectory: URL {
+        URL.documentsDirectory.appending(path: "photo-drafts", directoryHint: .isDirectory)
+    }
+
+    static func draftURL(for placeID: String) -> URL {
+        draftsDirectory.appending(path: "\(placeID).jpg")
     }
 
     static func photoURL(for rating: Rating) -> URL {
@@ -135,7 +203,7 @@ final class GameStore: ObservableObject {
     // MARK: Storage
 
     private func save() {
-        let saved = Saved(team: team, ratings: ratings, checkIns: checkIns)
+        let saved = Saved(team: team, ratings: ratings, checkIns: checkIns, drafts: drafts)
         if let data = try? JSONEncoder().encode(saved) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
