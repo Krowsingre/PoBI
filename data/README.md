@@ -7,5 +7,5 @@ name when Overture publishes one (monthly):
     pip install pyarrow
     python3 data/build_nj_places.py 2026-11-18.0
 
-It keeps places whose address is in New Jersey, whose category is under `food_and_drink`, that
+It keeps places whose address is in New Jersey, whose category is under `food_and_drink` or is a convenience store (Wawa, QuickChek, 7-Eleven and the like), that
 aren't marked permanently closed, and whose Overture confidence is at least 0.5.

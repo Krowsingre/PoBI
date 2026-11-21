@@ -42,9 +42,11 @@ struct MapScreen: View {
                 .restaurant, .cafe, .bakery, .brewery, .winery, .nightlife, .foodMarket,
             ])))
             .mapControls {
-                MapUserLocationButton()
                 MapCompass()
                 MapScaleView()
+            }
+            .overlay(alignment: .bottomTrailing) {
+                FollowButton(position: $position)
             }
             .onMapCameraChange(frequency: .onEnd) { context in
                 region = context.region

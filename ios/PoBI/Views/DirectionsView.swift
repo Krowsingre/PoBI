@@ -23,8 +23,10 @@ struct DirectionsView: View {
                 }
             }
             .mapControls {
-                MapUserLocationButton()
                 MapCompass()
+            }
+            .overlay(alignment: .bottomTrailing) {
+                FollowButton(position: $position)
             }
             .frame(minHeight: 260)
 
@@ -40,8 +42,6 @@ struct DirectionsView: View {
                                 Text(Self.distance(route.distance)).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Follow me") { position = .userLocation(followsHeading: true, fallback: .automatic) }
-                                .buttonStyle(.bordered)
                         }
                     }
                     Section("Steps") {
