@@ -10,7 +10,7 @@ struct PlaceDetailView: View {
 
     var body: some View {
         let rating = store.rating(for: place)
-        let status = store.checkInStatus(for: place)
+        let status = store.checkInStatus(for: place, from: location.location)
 
         List {
             Section {
@@ -25,6 +25,8 @@ struct PlaceDetailView: View {
                     Label("Walking directions", systemImage: "figure.walk")
                 }
             }
+
+            AllergyReminder()
 
             Section("Your visit") {
                 if let rating {
@@ -57,7 +59,7 @@ struct PlaceDetailView: View {
                 }
                 Button {
                     do {
-                        try store.checkIn(at: place)
+                        try store.checkIn(at: place, from: location.location)
                         message = "Checked in at \(place.name)."
                     } catch {
                         message = error.localizedDescription

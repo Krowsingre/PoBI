@@ -1,52 +1,71 @@
-import PhotosUI
 import SwiftUI
 
 /// An original rating: receipt photo, dish photo, Plate It or Break It, one to three stars.
+/// You can rate from anywhere (D11), but the receipt must be dated within the last 7 days,
+/// and both photos are taken with the app's camera (D13).
 struct RateView: View {
     @EnvironmentObject private var store: GameStore
     @Environment(\.dismiss) private var dismiss
     let place: Place
 
-    @State private var receiptItem: PhotosPickerItem?
-    @State private var dishItem: PhotosPickerItem?
+    private enum Shot: String, Identifiable {
+        case receipt, dish
+        var id: String { rawValue }
+    }
+
+    @State private var shooting: Shot?
+    @State private var receiptCheck: ReceiptReader.Result?
+    @State private var checkingReceipt = false
     @State private var dishImage: UIImage?
-    @State private var loadingDish = false
     @State private var verdict: Verdict = .plateIt
     @State private var stars = 2
     @State private var error: String?
 
-    /// Submit only once the selected dish photo has actually loaded.
-    private var canSubmit: Bool { receiptItem != nil && dishImage != nil && !loadingDish }
+    private var receiptOK: Bool {
+        if case .valid = receiptCheck { return true }
+        return false
+    }
+
+    private var canSubmit: Bool { receiptOK && dishImage != nil && !checkingReceipt }
 
     var body: some View {
         NavigationStack {
             Form {
+                if !CameraPicker.isAvailable {
+                    Section {
+                        Text("This device has no camera, so it can't take receipt and dish photos.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section {
-                    PhotosPicker(selection: $receiptItem, matching: .images) {
-                        Label(
-                            receiptItem == nil ? "Add receipt photo" : "Receipt added",
-                            systemImage: receiptItem == nil ? "doc.text.viewfinder" : "checkmark.circle.fill"
-                        )
+                    Button {
+                        shooting = .receipt
+                    } label: {
+                        Label(receiptCheck == nil ? "Take receipt photo" : "Retake receipt photo", systemImage: "doc.text.viewfinder")
                     }
-                    PhotosPicker(selection: $dishItem, matching: .images) {
-                        Label(
-                            dishItem == nil ? "Add dish photo" : "Dish photo added",
-                            systemImage: dishItem == nil ? "camera" : "checkmark.circle.fill"
-                        )
+                    .disabled(!CameraPicker.isAvailable || checkingReceipt)
+                    receiptStatus
+                } header: {
+                    Text("Receipt")
+                } footer: {
+                    Text("The receipt must be from the last 7 days, with the date in the photo. It's read on your phone and never saved.")
+                }
+
+                Section("Your food") {
+                    Button {
+                        shooting = .dish
+                    } label: {
+                        Label(dishImage == nil ? "Take food photo" : "Retake food photo", systemImage: "camera")
                     }
-                    if loadingDish {
-                        ProgressView("Loading photo…")
-                    } else if let dishImage {
+                    .disabled(!CameraPicker.isAvailable)
+                    if let dishImage {
                         Image(uiImage: dishImage)
                             .resizable()
                             .scaledToFit()
                             .frame(maxHeight: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                } header: {
-                    Text("Proof of your visit")
-                } footer: {
-                    Text("The receipt is checked and then deleted. Only the dish photo is kept.")
                 }
 
                 Section("Your verdict") {
@@ -85,25 +104,51 @@ struct RateView: View {
                         .disabled(!canSubmit)
                 }
             }
-            .onChange(of: dishItem) { _, item in
-                dishImage = nil
-                loadingDish = false
-                guard let item else { return }
-                loadingDish = true
-                error = nil
-                Task {
-                    let data = try? await item.loadTransferable(type: Data.self)
-                    // Ignore a result for a photo the player has since replaced.
-                    guard item == dishItem else { return }
-                    loadingDish = false
-                    if let data, let image = UIImage(data: data) {
-                        dishImage = ImageResizer.downscale(image)
-                    } else {
-                        dishItem = nil
-                        error = "Couldn't load that photo. Try another one."
+            .fullScreenCover(item: $shooting) { shot in
+                CameraPicker { image in
+                    switch shot {
+                    case .receipt: checkReceipt(image)
+                    case .dish: dishImage = ImageResizer.downscale(image)
                     }
                 }
+                .ignoresSafeArea()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var receiptStatus: some View {
+        if checkingReceipt {
+            HStack {
+                ProgressView()
+                Text("Reading the date…").foregroundStyle(.secondary)
+            }
+        } else if let receiptCheck {
+            switch receiptCheck {
+            case .valid(let date):
+                Label("Dated \(date.formatted(.dateTime.month().day().year()))", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .tooOld(let date):
+                Label("This receipt is from \(date.formatted(.dateTime.month().day().year())). It must be from the last 7 days.", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+            case .inFuture(let date):
+                Label("The date reads as \(date.formatted(.dateTime.month().day().year())), which hasn't happened yet. Retake the photo.", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+            case .noDate:
+                Label("Couldn't read a date. Retake the photo with the date in view, flat and well lit.", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func checkReceipt(_ image: UIImage) {
+        receiptCheck = nil
+        checkingReceipt = true
+        error = nil
+        Task {
+            let result = await ReceiptReader.check(image)
+            receiptCheck = result
+            checkingReceipt = false
         }
     }
 

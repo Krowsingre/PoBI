@@ -11,7 +11,7 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         super.init()
         authorization = manager.authorizationStatus
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.desiredAccuracy = kCLLocationAccuracyBest
     }
 
     func start() {

@@ -4,12 +4,14 @@ import SwiftUI
 struct PoBIApp: App {
     @StateObject private var store = GameStore()
     @StateObject private var location = LocationManager()
+    @StateObject private var allergies = AllergyStore()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(location)
+                .environmentObject(allergies)
         }
     }
 }
