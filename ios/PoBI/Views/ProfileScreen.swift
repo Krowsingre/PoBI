@@ -3,6 +3,7 @@ import SwiftUI
 struct ProfileScreen: View {
     @EnvironmentObject private var store: GameStore
     @EnvironmentObject private var allergies: AllergyStore
+    @EnvironmentObject private var location: LocationManager
     @State private var confirmReset = false
 
     var body: some View {
@@ -45,6 +46,20 @@ struct ProfileScreen: View {
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("About this build")
+                }
+                if LocationManager.testingAllowed {
+                    Section {
+                        if let test = location.testLocation {
+                            LabeledContent("Pretending to be at", value: test.name)
+                            Button("Use my real location") { location.clearTestLocation() }
+                        } else {
+                            Text("Using your real location.")
+                        }
+                    } header: {
+                        Text("Testing: fake location")
+                    } footer: {
+                        Text("Open any place and tap \"Test: pretend I'm here\" to rate, photograph and check in there without going. Only in test builds.")
+                    }
                 }
                 Section {
                     Button("Reset test data", role: .destructive) {
