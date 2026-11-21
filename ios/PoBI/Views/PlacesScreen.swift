@@ -1,21 +1,19 @@
+import CoreLocation
 import SwiftUI
 
 struct PlacesScreen: View {
     @EnvironmentObject private var store: GameStore
     @EnvironmentObject private var location: LocationManager
     @State private var query = ""
+    @State private var shown: [Place] = []
+    /// Where the list was last sorted from. It re-sorts after you move about 200 m.
+    @State private var sortedFrom: CLLocation?
 
-    private var shown: [Place] {
-        let matching = store.places.filter { place in
-            query.isEmpty
-                || place.name.localizedCaseInsensitiveContains(query)
-                || place.category.localizedCaseInsensitiveContains(query)
-                || place.town.localizedCaseInsensitiveContains(query)
-        }
-        guard let here = location.location else {
-            return matching.sorted { $0.name < $1.name }
-        }
-        return matching.sorted { here.distance(from: $0.location) < here.distance(from: $1.location) }
+    /// Nearby places when the search is empty, otherwise matches across New Jersey, closest first.
+    private func refresh() {
+        let here = location.location
+        sortedFrom = here
+        shown = store.catalog.search(query, near: here?.coordinate ?? GameStore.defaultCenter, limit: 100)
     }
 
     var body: some View {
@@ -26,12 +24,26 @@ struct PlacesScreen: View {
                 }
             }
             .overlay {
-                if shown.isEmpty {
+                if !store.catalogLoaded {
+                    ProgressView("Loading places…")
+                } else if shown.isEmpty {
                     ContentUnavailableView.search(text: query)
                 }
             }
             .searchable(text: $query, prompt: "Name, food or town")
             .navigationTitle("Places")
+            .task(id: query) {
+                // Wait for a pause in typing before searching all of New Jersey.
+                if !query.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }
+                guard !Task.isCancelled else { return }
+                refresh()
+            }
+            .onChange(of: store.catalogLoaded) { refresh() }
+            .onChange(of: location.location) { _, here in
+                guard let here else { return }
+                if let sortedFrom, here.distance(from: sortedFrom) < 200 { return }
+                refresh()
+            }
             .navigationDestination(for: Place.self) { place in
                 PlaceDetailView(place: place)
             }

@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import UIKit
 
@@ -12,7 +13,12 @@ final class GameStore: ObservableObject {
     @Published private(set) var ratings: [Rating] = []
     @Published private(set) var checkIns: [CheckIn] = []
 
-    let places: [Place] = SampleData.places
+    /// The bundled New Jersey catalogue. It loads in the background at launch.
+    @Published private(set) var catalog: PlaceCatalog = .empty
+    @Published private(set) var catalogLoaded = false
+
+    /// Used when the phone's location isn't known yet: central New Jersey.
+    static let defaultCenter = CLLocationCoordinate2D(latitude: 40.22, longitude: -74.55)
 
     /// Every game day, week and month runs on New Jersey time.
     static let calendar: Calendar = {
@@ -36,12 +42,17 @@ final class GameStore: ObservableObject {
             ratings = saved.ratings
             checkIns = saved.checkIns
         }
+        Task {
+            let catalog = await Task.detached(priority: .userInitiated) { PlaceCatalog.loadBundled() }.value
+            self.catalog = catalog
+            self.catalogLoaded = true
+        }
     }
 
     // MARK: Queries
 
     func place(id: String) -> Place? {
-        places.first { $0.id == id }
+        catalog.place(id: id)
     }
 
     func rating(for place: Place) -> Rating? {

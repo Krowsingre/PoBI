@@ -25,7 +25,7 @@ enum Team: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct Place: Identifiable, Codable, Hashable {
+struct Place: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let name: String
     let category: String
