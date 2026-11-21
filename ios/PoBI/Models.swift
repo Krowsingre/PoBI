@@ -1,0 +1,127 @@
+import CoreLocation
+import Foundation
+import SwiftUI
+
+/// Placeholder team identities. Names and colors are embre's call (open item 31.1).
+enum Team: String, Codable, CaseIterable, Identifiable {
+    case team1, team2, team3
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .team1: return "Team 1"
+        case .team2: return "Team 2"
+        case .team3: return "Team 3"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .team1: return .orange
+        case .team2: return .teal
+        case .team3: return .purple
+        }
+    }
+}
+
+struct Place: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let category: String
+    let town: String
+    let latitude: Double
+    let longitude: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var location: CLLocation {
+        CLLocation(latitude: latitude, longitude: longitude)
+    }
+}
+
+/// Plate It / Break It, each with one to three stars of intensity.
+/// Three Break It stars is the strongest negative, never a good rating.
+enum Verdict: String, Codable, CaseIterable, Identifiable {
+    case plateIt, breakIt
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .plateIt: return "Plate It"
+        case .breakIt: return "Break It"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .plateIt: return "hand.thumbsup.fill"
+        case .breakIt: return "hand.thumbsdown.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .plateIt: return .green
+        case .breakIt: return .red
+        }
+    }
+
+    func meaning(stars: Int) -> String {
+        switch (self, stars) {
+        case (.plateIt, 1): return "Mildly positive"
+        case (.plateIt, 2): return "Positive"
+        case (.plateIt, _): return "Extremely positive"
+        case (.breakIt, 1): return "Mildly negative"
+        case (.breakIt, 2): return "Negative"
+        case (.breakIt, _): return "Extremely negative"
+        }
+    }
+}
+
+struct Rating: Identifiable, Codable, Hashable {
+    let id: UUID
+    let placeID: String
+    let verdict: Verdict
+    let stars: Int
+    let date: Date
+}
+
+struct CheckIn: Identifiable, Codable, Hashable {
+    let id: UUID
+    let placeID: String
+    let date: Date
+}
+
+enum CheckInStatus: Equatable {
+    case allowed
+    case needsRating
+    case alreadyToday
+
+    var hint: String? {
+        switch self {
+        case .allowed: return nil
+        case .needsRating: return "Rate this place first. After that you can check in once a day."
+        case .alreadyToday: return "You've checked in here today. Come back tomorrow."
+        }
+    }
+}
+
+enum GameError: LocalizedError {
+    case alreadyRated
+    case notRated
+    case alreadyCheckedInToday
+    case missingPhotos
+
+    var errorDescription: String? {
+        switch self {
+        case .alreadyRated: return "You've already rated this place."
+        case .notRated: return "Rate this place before checking in."
+        case .alreadyCheckedInToday: return "You've already checked in here today."
+        case .missingPhotos: return "Add a receipt photo and a dish photo."
+        }
+    }
+}
