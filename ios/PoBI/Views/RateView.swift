@@ -72,10 +72,9 @@ struct RateView: View {
                             systemImage: "checkmark.circle.fill"
                         )
                         .foregroundStyle(.green)
-                        Button("Retake photo", role: .destructive) {
-                            store.discardDraft(for: place)
-                            self.dishImage = nil
-                        }
+                        // The saved photo is only replaced once a new one is taken at the place.
+                        Button("Retake photo") { shooting = .dish }
+                            .disabled(!CameraPicker.isAvailable || presence != .allowed)
                     } else {
                         Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
                         Button {
