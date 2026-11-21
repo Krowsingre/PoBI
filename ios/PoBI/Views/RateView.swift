@@ -2,7 +2,8 @@ import SwiftUI
 
 /// An original rating: receipt photo, dish photo, Plate It or Break It, one to three stars.
 /// You can rate from anywhere (D11), but the receipt must be dated within the last 7 days,
-/// and both photos are taken with the app's camera (D13).
+/// and both photos are taken with the app's camera (D13). Where food photos aren't allowed,
+/// a storefront photo stands in (D16).
 struct RateView: View {
     @EnvironmentObject private var store: GameStore
     @Environment(\.dismiss) private var dismiss
@@ -17,6 +18,8 @@ struct RateView: View {
     @State private var receiptCheck: ReceiptReader.Result?
     @State private var checkingReceipt = false
     @State private var dishImage: UIImage?
+    /// The place doesn't allow food photos, so a photo of the outside or sign stands in (D16).
+    @State private var noPhotosAllowed = false
     @State private var verdict: Verdict = .plateIt
     @State private var stars = 2
     @State private var error: String?
@@ -52,11 +55,18 @@ struct RateView: View {
                     Text("The receipt must be from the last 7 days, with the date in the photo. It's read on your phone and never saved.")
                 }
 
-                Section("Your food") {
+                Section {
+                    Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
+                        .onChange(of: noPhotosAllowed) { dishImage = nil }
                     Button {
                         shooting = .dish
                     } label: {
-                        Label(dishImage == nil ? "Take food photo" : "Retake food photo", systemImage: "camera")
+                        Label(
+                            noPhotosAllowed
+                                ? (dishImage == nil ? "Take storefront photo" : "Retake storefront photo")
+                                : (dishImage == nil ? "Take food photo" : "Retake food photo"),
+                            systemImage: noPhotosAllowed ? "storefront" : "camera"
+                        )
                     }
                     .disabled(!CameraPicker.isAvailable)
                     if let dishImage {
@@ -65,6 +75,12 @@ struct RateView: View {
                             .scaledToFit()
                             .frame(maxHeight: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                } header: {
+                    Text(noPhotosAllowed ? "The place" : "Your food")
+                } footer: {
+                    if noPhotosAllowed {
+                        Text("Photograph the outside or the sign instead. You can take it after you leave. The rating counts the same.")
                     }
                 }
 
@@ -158,7 +174,7 @@ struct RateView: View {
             return
         }
         do {
-            try store.rate(place, verdict: verdict, stars: stars, dishPhoto: dishImage)
+            try store.rate(place, verdict: verdict, stars: stars, dishPhoto: dishImage, storefront: noPhotosAllowed)
             dismiss()
         } catch {
             self.error = error.localizedDescription

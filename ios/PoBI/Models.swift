@@ -88,6 +88,8 @@ struct Rating: Identifiable, Codable, Hashable {
     let verdict: Verdict
     let stars: Int
     let date: Date
+    /// True when the place didn't allow food photos and the photo shows the storefront instead (D16).
+    var storefrontPhoto: Bool? = nil
 }
 
 struct CheckIn: Identifiable, Codable, Hashable {
@@ -134,7 +136,7 @@ enum GameError: LocalizedError {
         case .alreadyRated: return "You've already rated this place."
         case .notRated: return "Rate this place before checking in."
         case .alreadyCheckedInToday: return "You've already checked in here today."
-        case .missingPhotos: return "Take a receipt photo and a food photo."
+        case .missingPhotos: return "Take a receipt photo and a food or storefront photo."
         case .notHere: return "You need to be at the place to check in."
         }
     }
