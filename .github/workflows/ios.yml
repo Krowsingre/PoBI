@@ -15,12 +15,15 @@ concurrency:
 jobs:
   build:
     name: Build for simulator
-    runs-on: macos-15
+    runs-on: macos-26
     defaults:
       run:
         working-directory: ios
     steps:
       - uses: actions/checkout@v4
+      - name: Show Xcode version
+        # App Store Connect only accepts builds made with the iOS 26 SDK (Xcode 26) or later.
+        run: xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
@@ -36,7 +39,7 @@ jobs:
     name: Upload to TestFlight
     needs: build
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-15
+    runs-on: macos-26
     defaults:
       run:
         working-directory: ios
@@ -58,6 +61,9 @@ jobs:
             echo "::add-mask::$value"
             echo "$name=$value" >> "$GITHUB_ENV"
           done
+      - name: Show Xcode version
+        # App Store Connect only accepts builds made with the iOS 26 SDK (Xcode 26) or later.
+        run: xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
