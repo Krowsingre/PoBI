@@ -19,6 +19,7 @@ struct PoBIApp: App {
 struct RootView: View {
     @EnvironmentObject private var store: GameStore
     @EnvironmentObject private var location: LocationManager
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -38,5 +39,8 @@ struct RootView: View {
             }
         }
         .onAppear { location.start() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { location.start() }
+        }
     }
 }

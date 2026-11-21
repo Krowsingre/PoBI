@@ -15,6 +15,10 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func start() {
+        // Use the phone's last known position right away while a fresh fix comes in.
+        if location == nil, let cached = manager.location {
+            location = cached
+        }
         switch manager.authorizationStatus {
         case .notDetermined:
             manager.requestWhenInUseAuthorization()

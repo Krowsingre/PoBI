@@ -3,6 +3,9 @@ import SwiftUI
 
 struct MapScreen: View {
     @EnvironmentObject private var store: GameStore
+    @EnvironmentObject private var location: LocationManager
+    /// Set once the map has jumped to where you are, so it doesn't fight your panning after that.
+    @State private var centeredOnUser = false
     @State private var position: MapCameraPosition = .userLocation(
         fallback: .region(MKCoordinateRegion(
             center: GameStore.defaultCenter,
@@ -53,6 +56,8 @@ struct MapScreen: View {
                 refresh()
             }
             .onChange(of: store.catalogLoaded) { refresh() }
+            .onAppear { centerOnUserIfNeeded() }
+            .onChange(of: location.location) { centerOnUserIfNeeded() }
             .overlay(alignment: .top) {
                 if let hint {
                     Text(hint)
@@ -79,6 +84,16 @@ struct MapScreen: View {
         if zoomedOutTooFar { return "Zoom in to see places" }
         if region != nil && visible.isEmpty { return "No places here yet" }
         return nil
+    }
+
+    /// Jumps to your position as soon as the app knows it, zoomed in enough to show places.
+    private func centerOnUserIfNeeded() {
+        guard !centeredOnUser, let here = location.location else { return }
+        centeredOnUser = true
+        position = .region(MKCoordinateRegion(
+            center: here.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        ))
     }
 
     private func refresh() {
