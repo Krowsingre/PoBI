@@ -10,11 +10,13 @@ struct RateView: View {
     @State private var receiptItem: PhotosPickerItem?
     @State private var dishItem: PhotosPickerItem?
     @State private var dishImage: UIImage?
+    @State private var loadingDish = false
     @State private var verdict: Verdict = .plateIt
     @State private var stars = 2
     @State private var error: String?
 
-    private var canSubmit: Bool { receiptItem != nil && dishItem != nil }
+    /// Submit only once the selected dish photo has actually loaded.
+    private var canSubmit: Bool { receiptItem != nil && dishImage != nil && !loadingDish }
 
     var body: some View {
         NavigationStack {
@@ -32,7 +34,9 @@ struct RateView: View {
                             systemImage: dishItem == nil ? "camera" : "checkmark.circle.fill"
                         )
                     }
-                    if let dishImage {
+                    if loadingDish {
+                        ProgressView("Loading photo…")
+                    } else if let dishImage {
                         Image(uiImage: dishImage)
                             .resizable()
                             .scaledToFit()
@@ -82,18 +86,29 @@ struct RateView: View {
                 }
             }
             .onChange(of: dishItem) { _, item in
+                dishImage = nil
+                loadingDish = false
+                guard let item else { return }
+                loadingDish = true
+                error = nil
                 Task {
-                    guard let item,
-                          let data = try? await item.loadTransferable(type: Data.self),
-                          let image = UIImage(data: data) else { return }
-                    dishImage = ImageResizer.downscale(image)
+                    let data = try? await item.loadTransferable(type: Data.self)
+                    // Ignore a result for a photo the player has since replaced.
+                    guard item == dishItem else { return }
+                    loadingDish = false
+                    if let data, let image = UIImage(data: data) {
+                        dishImage = ImageResizer.downscale(image)
+                    } else {
+                        dishItem = nil
+                        error = "Couldn't load that photo. Try another one."
+                    }
                 }
             }
         }
     }
 
     private func submit() {
-        guard canSubmit else {
+        guard canSubmit, let dishImage else {
             error = GameError.missingPhotos.localizedDescription
             return
         }

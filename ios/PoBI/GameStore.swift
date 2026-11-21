@@ -60,13 +60,12 @@ final class GameStore: ObservableObject {
 
     // MARK: Actions
 
-    func rate(_ place: Place, verdict: Verdict, stars: Int, dishPhoto: UIImage?) throws {
+    func rate(_ place: Place, verdict: Verdict, stars: Int, dishPhoto: UIImage) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
+        guard let data = dishPhoto.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
         let rating = Rating(id: UUID(), placeID: place.id, verdict: verdict, stars: min(max(stars, 1), 3), date: .now)
-        if let dishPhoto, let data = dishPhoto.jpegData(compressionQuality: 0.7) {
-            try? FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
-            try? data.write(to: Self.photoURL(for: rating))
-        }
+        try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
+        try data.write(to: Self.photoURL(for: rating))
         ratings.append(rating)
         save()
     }
