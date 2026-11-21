@@ -103,9 +103,8 @@ struct PlaceCatalog: Sendable {
     /// The nearest places to a point, searching outward ring by ring.
     func nearest(to coordinate: CLLocationCoordinate2D, limit: Int) -> [Place] {
         let origin = Cell(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        let scale = cos(coordinate.latitude * .pi / 180)
         var found: [Int] = []
-        // Keep one extra ring after reaching the limit so nothing closer is missed at cell edges.
-        var extraRings = 1
         for radius in 0...60 {
             for row in (origin.row - radius)...(origin.row + radius) {
                 for column in (origin.column - radius)...(origin.column + radius) {
@@ -114,10 +113,12 @@ struct PlaceCatalog: Sendable {
                     found.append(contentsOf: indices)
                 }
             }
-            if found.count >= limit {
-                if extraRings == 0 { break }
-                extraRings -= 1
-            }
+            guard found.count >= limit else { continue }
+            // Every place closer than `covered` sits in a cell already searched, so once the
+            // limit-th closest place is within it, no unsearched cell can hold a closer one.
+            let covered = Double(radius) * Self.cellSize * min(1, scale)
+            let distances = found.map { squaredDistance($0, from: coordinate, scale: scale) }.sorted()
+            if distances[limit - 1] <= covered * covered { break }
         }
         return closest(found, to: coordinate, limit: limit)
     }
@@ -134,16 +135,18 @@ struct PlaceCatalog: Sendable {
     private func closest(_ indices: [Int], to coordinate: CLLocationCoordinate2D, limit: Int) -> [Place] {
         // Squared degree distance, with longitude scaled for latitude, is enough for ordering.
         let scale = cos(coordinate.latitude * .pi / 180)
-        func key(_ index: Int) -> Double {
-            let place = places[index]
-            let dLat = place.latitude - coordinate.latitude
-            let dLon = (place.longitude - coordinate.longitude) * scale
-            return dLat * dLat + dLon * dLon
-        }
         return indices
-            .map { (index: $0, distance: key($0)) }
+            .map { (index: $0, distance: squaredDistance($0, from: coordinate, scale: scale)) }
             .sorted { $0.distance < $1.distance }
             .prefix(limit)
             .map { places[$0.index] }
+    }
+
+    /// Squared degree distance with longitude scaled for latitude. Enough for ordering nearby places.
+    private func squaredDistance(_ index: Int, from coordinate: CLLocationCoordinate2D, scale: Double) -> Double {
+        let place = places[index]
+        let dLat = place.latitude - coordinate.latitude
+        let dLon = (place.longitude - coordinate.longitude) * scale
+        return dLat * dLat + dLon * dLon
     }
 }
