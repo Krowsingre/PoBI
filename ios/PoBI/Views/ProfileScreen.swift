@@ -20,6 +20,15 @@ struct ProfileScreen: View {
                         }
                     }
                 }
+                if ServerClient.shared.isConfigured {
+                    Section {
+                        NavigationLink {
+                            FriendsView()
+                        } label: {
+                            Label("Friends", systemImage: "person.2")
+                        }
+                    }
+                }
                 Section {
                     NavigationLink {
                         AllergiesView()

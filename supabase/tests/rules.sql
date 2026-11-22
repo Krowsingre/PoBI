@@ -186,6 +186,43 @@ reset role;
 update attest_settings set require_attest = false;
 select set_config('request.headers', '', false);
 
+-- Friends and shared ratings.
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+select set_nickname('  Embre  ');
+insert into expect select 'nickname is trimmed and saved', (select nickname = 'Embre' and length(friend_code) = 8 from my_profile());
+update players set team = 'team1';
+insert into expect select 'a nickname doesn''t reopen the team pick', (select team = 'team2' from players);
+create temp table codes as select (select friend_code from my_profile()) as mine;
+grant all on codes to public;
+set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+insert into expect select 'strangers can''t see each other''s ratings',
+  (select count(*) = 0 from friend_ratings('11111111-1111-1111-1111-111111111111'));
+insert into expect select 'adding by code sends a request', (select add_friend(lower((select mine from codes)))) = 'requested';
+insert into expect select 'a request alone shares nothing',
+  (select count(*) = 0 from friend_ratings('11111111-1111-1111-1111-111111111111'));
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into expect select 'the other player sees the request', (select status = 'incoming' from friends());
+select answer_friend('22222222-2222-2222-2222-222222222222', true);
+insert into expect select 'accepting makes you friends', (select status = 'friend' from friends());
+set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+insert into expect select 'friends see each other''s counted ratings',
+  (select count(*) > 0 from friend_ratings('11111111-1111-1111-1111-111111111111'));
+insert into expect select 'a place shows its overall, team and friends'' ratings',
+  (select (r -> 'overall' ->> 'plate')::int >= 1 and (r -> 'friends' ->> 'plate')::int >= 1
+          and jsonb_array_length(r -> 'friend_ratings') >= 1 and r -> 'friend_ratings' -> 0 ->> 'nickname' = 'Embre'
+   from (select place_ratings('real-place') as r) x);
+do $$ begin
+  perform add_friend('NOPE0000');
+  insert into expect values ('unknown codes are refused', false);
+exception when raise_exception then
+  insert into expect values ('unknown codes are refused', true);
+end $$;
+select remove_friend('11111111-1111-1111-1111-111111111111');
+insert into expect select 'removing a friend stops sharing',
+  (select count(*) = 0 from friend_ratings('11111111-1111-1111-1111-111111111111'));
+reset role;
+
 select name, ok from expect;
 do $$ begin
   if exists (select 1 from expect where not ok) then raise exception 'A rules check failed'; end if;

@@ -1,15 +1,25 @@
 import MapKit
 import SwiftUI
 
-/// Walking directions from where you are to a place. Driving, biking, rail and bus come later.
+/// Walking or driving directions from where you are to a place. Biking, rail and bus come later.
 struct DirectionsView: View {
+    enum Mode: String, CaseIterable, Identifiable {
+        case walking, driving
+        var id: String { rawValue }
+        var title: String { self == .walking ? "Walk" : "Drive" }
+        var symbol: String { self == .walking ? "figure.walk" : "car.fill" }
+        var transport: MKDirectionsTransportType { self == .walking ? .walking : .automobile }
+        var mapsMode: String { self == .walking ? MKLaunchOptionsDirectionsModeWalking : MKLaunchOptionsDirectionsModeDriving }
+    }
+
     @EnvironmentObject private var location: LocationManager
     let place: Place
+    /// Remembers the last choice, so drivers don't have to switch every time.
+    @AppStorage("directionsMode") private var mode: Mode = .walking
 
     @State private var route: MKRoute?
     @State private var failure: String?
     @State private var position: MapCameraPosition = .automatic
-    @State private var loading = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,10 +41,18 @@ struct DirectionsView: View {
             .frame(minHeight: 260)
 
             List {
+                Section {
+                    Picker("Travel by", selection: $mode) {
+                        ForEach(Mode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.symbol).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
                 if let route {
                     Section {
                         HStack {
-                            Image(systemName: "figure.walk")
+                            Image(systemName: mode.symbol)
                                 .font(.title2)
                                 .foregroundStyle(Color.accentColor)
                             VStack(alignment: .leading) {
@@ -66,7 +84,7 @@ struct DirectionsView: View {
                     Section {
                         HStack {
                             ProgressView()
-                            Text("Finding a walking route…").foregroundStyle(.secondary)
+                            Text(mode == .walking ? "Finding a walking route…" : "Finding a driving route…").foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -77,13 +95,13 @@ struct DirectionsView: View {
                         Label("Spoken directions in Apple Maps", systemImage: "arrow.up.right.square")
                     }
                 } footer: {
-                    Text("Walking routes come from Apple Maps. Always watch where you're going.")
+                    Text(mode == .walking ? "Routes come from Apple Maps. Always watch where you're going." : "Routes come from Apple Maps. Don't use your phone while driving: start spoken directions before you set off.")
                 }
             }
         }
-        .navigationTitle("Walk to \(place.name)")
+        .navigationTitle("\(mode.title) to \(place.name)")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadRoute() }
+        .task(id: mode) { await loadRoute() }
         .onAppear { location.start() }
     }
 
@@ -94,18 +112,18 @@ struct DirectionsView: View {
     }
 
     private func loadRoute() async {
-        guard !loading else { return }
-        loading = true
-        defer { loading = false }
+        let wanted = mode
         failure = nil
+        route = nil
         let request = MKDirections.Request()
         request.source = MKMapItem.forCurrentLocation()
         request.destination = destination
-        request.transportType = .walking
+        request.transportType = mode.transport
         do {
             let response = try await MKDirections(request: request).calculate()
+            guard wanted == mode else { return }  // switched Walk/Drive while this was loading
             guard let best = response.routes.first else {
-                failure = "No walking route found."
+                failure = mode == .walking ? "No walking route found." : "No driving route found."
                 return
             }
             route = best
@@ -115,15 +133,16 @@ struct DirectionsView: View {
             )
             position = .rect(padded)
         } catch {
+            guard wanted == mode else { return }
             failure = location.location == nil
                 ? "Turn on location for Plate or Break It to get directions."
-                : "Couldn't get a walking route. It may be too far to walk."
+                : (mode == .walking ? "Couldn't get a walking route. It may be too far to walk. Try Drive." : "Couldn't get a driving route.")
         }
     }
 
     private func openInMaps() {
         destination.openInMaps(launchOptions: [
-            MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeWalking,
+            MKLaunchOptionsDirectionsModeKey: mode.mapsMode,
         ])
     }
 

@@ -68,3 +68,12 @@ expect "App Attest hands out a challenge" 200 "$(fn '{"action":"challenge"}')"
 expect "App Attest refuses an unknown key" 404 "$(fn "{\"action\":\"submit\",\"table\":\"ratings\",\"keyId\":\"nope\",\"assertion\":\"\",\"body\":\"{}\"}")"
 fn '{"action":"challenge"}' >/dev/null; challenge=$(jq .challenge /tmp/out)
 expect "App Attest refuses a fake attestation" 403 "$(fn "{\"action\":\"register\",\"keyId\":\"k\",\"attestation\":\"AAAA\",\"challenge\":$challenge}")"
+rpc() { # name body -> prints HTTP status, body to /tmp/out
+  curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/rest/v1/rpc/$1" \
+    -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$2"
+}
+code=$(rpc set_nickname '{"name":"Smoke test"}'); [[ "$code" == 20? ]] && echo "ok: set a nickname" || { echo "FAIL: set a nickname ($code)"; cat /tmp/out; exit 1; }
+expect "read own profile" 200 "$(rpc my_profile '{}')"
+jq -e '.[0].friend_code | length == 8' /tmp/out >/dev/null && echo "ok: has a friend code"
+expect "a place's player ratings" 200 "$(rpc place_ratings "{\"place\":\"$place_id\"}")"
+jq -e '.overall.plate >= 1' /tmp/out >/dev/null && echo "ok: the test rating shows in the place's overall" || { echo "FAIL: overall missing the rating"; cat /tmp/out; exit 1; }

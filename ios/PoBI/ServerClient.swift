@@ -169,6 +169,96 @@ actor ServerClient {
         return try await get("ratings?select=id,pending,rejected&id=in.(\(list))")
     }
 
+    // MARK: Friends and other players' ratings
+
+    struct Profile: Decodable {
+        let nickname: String?
+        let friend_code: String
+    }
+
+    struct Friend: Decodable, Identifiable, Equatable {
+        let id: UUID
+        let nickname: String?
+        let team: String?
+        /// friend, incoming (they asked you) or outgoing (you asked them).
+        let status: String
+        let ratings: Int?
+
+        var name: String { nickname ?? "Player without a nickname" }
+    }
+
+    struct FriendRating: Decodable, Identifiable, Equatable {
+        let place_id: String
+        let verdict: String
+        let stars: Int
+        let rated_at: String
+        var id: String { place_id }
+    }
+
+    /// Plate It and Break It counts, and the average score from -3 (all three-star Break It) to +3.
+    struct Tally: Decodable, Equatable {
+        let plate: Int
+        let dislikes: Int
+        let score: Double?
+        var total: Int { plate + dislikes }
+
+        enum CodingKeys: String, CodingKey {
+            case plate, score
+            case dislikes = "break"
+        }
+    }
+
+    struct PlaceRatings: Decodable, Equatable {
+        let overall: Tally
+        let team: Tally
+        let friends: Tally
+        let friend_ratings: [FriendPlaceRating]
+    }
+
+    struct FriendPlaceRating: Decodable, Identifiable, Equatable {
+        let nickname: String
+        let team: String?
+        let verdict: String
+        let stars: Int
+        let rated_at: String
+        var id: String { nickname + rated_at }
+    }
+
+    func myProfile() async throws -> Profile? {
+        let rows: [Profile] = try await rpc("my_profile", body: [String: String]())
+        return rows.first
+    }
+
+    func setNickname(_ name: String) async throws {
+        _ = try await rpcData("set_nickname", body: ["name": name])
+    }
+
+    /// Returns "requested", "accepted" (they had already asked you) or "already".
+    func addFriend(code: String) async throws -> String {
+        try await rpc("add_friend", body: ["code": code])
+    }
+
+    func answerFriend(_ player: UUID, accept: Bool) async throws {
+        struct Body: Encodable { let player: UUID; let accept: Bool }
+        _ = try await rpcData("answer_friend", body: Body(player: player, accept: accept))
+    }
+
+    func removeFriend(_ player: UUID) async throws {
+        _ = try await rpcData("remove_friend", body: ["player": player.uuidString.lowercased()])
+    }
+
+    func friends() async throws -> [Friend] {
+        try await rpc("friends", body: [String: String]())
+    }
+
+    func friendRatings(_ friend: UUID) async throws -> [FriendRating] {
+        try await rpc("friend_ratings", body: ["friend": friend.uuidString.lowercased()])
+    }
+
+    func placeRatings(_ placeID: String) async throws -> PlaceRatings {
+        try await rpc("place_ratings", body: ["place": placeID])
+    }
+
     // MARK: Review (D18): for players listed as reviewers on the server
 
     struct ReviewItem: Decodable, Identifiable, Equatable {
