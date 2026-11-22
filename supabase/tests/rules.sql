@@ -223,6 +223,18 @@ insert into expect select 'removing a friend stops sharing',
   (select count(*) = 0 from friend_ratings('11111111-1111-1111-1111-111111111111'));
 reset role;
 
+-- Digital receipts wait for review.
+insert into places values ('p9', 41.0, -75.0, '882a10000ffffff');
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, pending, receipt_photo)
+  values ('99999999-9999-9999-9999-999999999999', 'p9', 0, 0, 'breakIt', 2, '{digitalReceipt}', true);
+insert into expect select 'a digital receipt rating is pending',
+  (select pending = '{digitalReceipt}' and counted_at is null from ratings where place_id = 'p9');
+insert into expect select 'a digital receipt is in the review queue',
+  (select count(*) = 1 from review_queue() where id = '99999999-9999-9999-9999-999999999999');
+reset role;
+
 select name, ok from expect;
 do $$ begin
   if exists (select 1 from expect where not ok) then raise exception 'A rules check failed'; end if;

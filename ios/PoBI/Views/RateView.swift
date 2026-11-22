@@ -12,6 +12,8 @@ struct RateView: View {
     @EnvironmentObject private var location: LocationManager
     @Environment(\.dismiss) private var dismiss
     let place: Place
+    /// A receipt file shared into the app, to use instead of a receipt photo.
+    var sharedReceipt: URL? = nil
 
     private enum Shot: String, Identifiable {
         case receipt, dish
@@ -24,6 +26,9 @@ struct RateView: View {
     @State private var receiptScan: ReceiptReader.Scan?
     @State private var receiptMatch: ReceiptMatcher.Result?
     @State private var checkingReceipt = false
+    /// The receipt came as a file (PDF, email, screenshot), so it goes to review before counting.
+    @State private var digital = false
+    @State private var importing = false
     @State private var checkingPhoto = false
     /// The food or storefront photo, taken at the place and kept as a draft for 7 days (D17).
     @State private var dishImage: UIImage?
@@ -69,7 +74,7 @@ struct RateView: View {
 
     private var hasPhoto: Bool { dishImage != nil && store.draft(for: place) != nil }
     private var skippingPhoto: Bool { forgotPhoto && !hasPhoto }
-    private var willBePending: Bool { typedReceipt != nil || skippingPhoto }
+    private var willBePending: Bool { typedReceipt != nil || skippingPhoto || digital }
 
     private var canSubmit: Bool {
         (receiptOK || typedReceipt != nil) && (hasPhoto || skippingPhoto) && !checkingReceipt && !checkingPhoto
@@ -94,6 +99,17 @@ struct RateView: View {
                         Label(receiptCheck == nil ? "Take receipt photo" : "Retake receipt photo", systemImage: "doc.text.viewfinder")
                     }
                     .disabled(!CameraPicker.isAvailable || checkingReceipt)
+                    Button {
+                        importing = true
+                    } label: {
+                        Label(digital ? "Choose another digital receipt" : "Use a digital receipt", systemImage: "doc.richtext")
+                    }
+                    .disabled(checkingReceipt)
+                    if digital && receiptCheck != nil {
+                        Label("Digital receipt: a reviewer checks it before your rating counts.", systemImage: "hourglass")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                     receiptStatus
                     if canTypeReceipt {
                         Toggle("Can't scan it? Type it in", isOn: $typingReceipt)
@@ -110,7 +126,7 @@ struct RateView: View {
                 } header: {
                     Text("Receipt")
                 } footer: {
-                    Text("The receipt must be from this place and the last 7 days, with the name and date in the photo. It's read on your phone, and only kept if your rating needs a review.")
+                    Text("The receipt must be from this place and the last 7 days, with the name and date in view. A digital receipt can be a PDF, a saved email or a screenshot. It's read on your phone, and only kept if your rating needs a review.")
                 }
 
                 Section {
@@ -207,6 +223,10 @@ struct RateView: View {
                     noPhotosAllowed = draft.storefront
                 }
                 if typedBusiness.isEmpty { typedBusiness = place.name }
+                if let sharedReceipt, receiptCheck == nil, !checkingReceipt { checkDigital(sharedReceipt) }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: DigitalReceipt.types) { result in
+                if case .success(let url) = result { checkDigital(url) }
             }
             .fullScreenCover(item: $shooting) { shot in
                 CameraPicker { image in
@@ -307,7 +327,31 @@ struct RateView: View {
         }
     }
 
+    private func checkDigital(_ url: URL) {
+        receiptImage = nil
+        receiptCheck = nil
+        receiptScan = nil
+        receiptMatch = nil
+        checkingReceipt = true
+        error = nil
+        Task {
+            do {
+                let receipt = try await DigitalReceipt.load(url)
+                let scan = ReceiptReader.scan(lines: receipt.lines)
+                receiptImage = receipt.image
+                receiptMatch = ReceiptMatcher.check(lines: scan.lines, place: place, catalog: store.catalog)
+                receiptCheck = scan.date
+                receiptScan = scan
+                digital = true
+            } catch {
+                self.error = error.localizedDescription
+            }
+            checkingReceipt = false
+        }
+    }
+
     private func checkReceipt(_ image: UIImage) {
+        digital = false
         receiptImage = image
         receiptCheck = nil
         receiptScan = nil
@@ -334,6 +378,7 @@ struct RateView: View {
                 receiptPhoto: receiptImage,
                 typedReceipt: receiptOK ? nil : typedReceipt,
                 withoutPhoto: skippingPhoto,
+                digitalReceipt: digital,
                 receiptPrintedAt: receiptScan?.printedAt,
                 receiptNumber: receiptScan?.number,
                 receiptDate: { if case .valid(let day) = receiptScan?.date { return day } else { return nil } }()

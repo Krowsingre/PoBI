@@ -39,6 +39,18 @@ struct RootView: View {
             }
         }
         .onAppear { location.start() }
+        // A receipt shared from Mail, Files, a delivery app or a screenshot.
+        .onOpenURL { url in
+            if url.isFileURL { store.receiveSharedReceipt(url) }
+        }
+        .sheet(isPresented: Binding(
+            get: { store.sharedReceipt != nil && store.team != nil },
+            set: { if !$0 { store.clearSharedReceipt() } }
+        )) {
+            if let url = store.sharedReceipt {
+                SharedReceiptView(url: url)
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 location.start()

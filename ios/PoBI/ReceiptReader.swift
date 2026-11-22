@@ -31,7 +31,11 @@ enum ReceiptReader {
     }
 
     static func read(_ image: UIImage, now: Date = .now) async -> Scan {
-        let lines = await recognizeText(in: image)
+        scan(lines: await recognizeText(in: image), now: now)
+    }
+
+    /// Checks lines of receipt text, from a photo or a digital receipt.
+    static func scan(lines: [String], now: Date = .now) -> Scan {
         let found = lines.flatMap { Self.dates(in: $0, now: now) }
         let date = evaluate(found, now: now)
         var printedAt: Date?
