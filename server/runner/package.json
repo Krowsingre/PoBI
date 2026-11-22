@@ -1,0 +1,15 @@
+{
+  "name": "@pobi/runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Replays ratings and check-ins through the rules engine and writes who owns what",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "run": "node run.ts",
+    "test": "node --test \"*.test.ts\""
+  },
+  "dependencies": {
+    "h3-js": "4.2.1"
+  }
+}
