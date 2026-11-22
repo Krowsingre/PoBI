@@ -301,8 +301,8 @@ actor ServerClient {
                 if code == "unknown_key" || code == "attest_failed" {
                     // The server doesn't know this key or didn't accept its signature: make a new one next time.
                     forgetAttestKey(reply?["message"] as? String ?? "Not accepted")
-                } else if status >= 500 || code == "replayed" {
-                    // The signing step is down or tripped over itself: send it directly this time.
+                } else if status >= 500 || status == 404 || code == "replayed" {
+                    // The signing step is down, not deployed, or tripped over itself: send it directly this time.
                 } else {
                     if status == 409 { return }
                     try Self.check(response, answer)
