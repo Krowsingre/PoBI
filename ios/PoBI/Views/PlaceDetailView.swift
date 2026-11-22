@@ -19,6 +19,14 @@ struct PlaceDetailView: View {
                     LabeledContent("Address", value: place.address)
                 }
                 LabeledContent("Town", value: place.town)
+                if let owner = store.placeOwners[place.id] {
+                    LabeledContent("Held by") {
+                        HStack(spacing: 6) {
+                            Circle().fill(owner.color).frame(width: 10, height: 10)
+                            Text(owner.name)
+                        }
+                    }
+                }
                 if let distance = location.distanceText(to: place) {
                     LabeledContent("Distance", value: distance)
                 }

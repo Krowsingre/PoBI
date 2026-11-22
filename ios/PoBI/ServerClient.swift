@@ -165,6 +165,39 @@ actor ServerClient {
                        prefer: "resolution=ignore-duplicates,return=minimal", conflictIsOK: true)
     }
 
+    /// An area a team owns, with its hexagon's corners as [latitude, longitude] pairs.
+    struct AreaOwner: Decodable, Identifiable, Equatable {
+        let area: String
+        let team: String
+        let boundary: [[Double]]
+        var id: String { area }
+    }
+
+    struct PlaceOwner: Decodable {
+        let place_id: String
+        let team: String
+    }
+
+    /// Who owns which areas and places, as last worked out by the game runner.
+    func owners() async throws -> (areas: [AreaOwner], places: [PlaceOwner]) {
+        let areas: [AreaOwner] = try await get("area_owners?select=area,team,boundary")
+        let places: [PlaceOwner] = try await get("place_owners?select=place_id,team")
+        return (areas, places)
+    }
+
+    private func get<T: Decodable>(_ path: String) async throws -> T {
+        guard let config else { throw ServerError.notConfigured }
+        let started = generation
+        let session = try await validSession()
+        var request = URLRequest(url: URL(string: "rest/v1/\(path)", relativeTo: config.url)!)
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard started == generation else { throw ServerError.accountReset }
+        try Self.check(response, data)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
     private func rest<Body: Encodable>(_ path: String, method: String, body: Body,
                                        prefer: String, conflictIsOK: Bool = false) async throws {
         guard let config else { throw ServerError.notConfigured }

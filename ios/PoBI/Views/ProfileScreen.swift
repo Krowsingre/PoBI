@@ -45,7 +45,7 @@ struct ProfileScreen: View {
                 } header: {
                     Text("Game server")
                 } footer: {
-                    Text("Your ratings and check-ins are sent to the game server so they can count for your team. Team areas, takeovers and Counterplate come next.")
+                    Text("Your ratings and check-ins are sent to the game server so they count for your team. On the map, a coloured hexagon is an area a team won at month end, and a coloured ring on a pin shows which team holds that place through check-ins. Owners update about every 15 minutes.")
                 }
                 Section {
                     Text("This is an early test build.")
