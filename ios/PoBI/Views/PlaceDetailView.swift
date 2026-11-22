@@ -44,7 +44,7 @@ struct PlaceDetailView: View {
                 NavigationLink {
                     DirectionsView(place: place)
                 } label: {
-                    Label("Walking directions", systemImage: "figure.walk")
+                    Label("Directions", systemImage: "arrow.triangle.turn.up.right.diamond")
                 }
             }
 
@@ -75,6 +75,8 @@ struct PlaceDetailView: View {
                 }
                 LabeledContent("Your check-ins", value: "\(store.checkIns(for: place).count)")
             }
+
+            PlaceRatingsSection(place: place)
 
             Section {
                 if rating == nil {
