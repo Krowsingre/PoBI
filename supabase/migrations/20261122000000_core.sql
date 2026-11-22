@@ -38,6 +38,10 @@ create table public.check_ins (
   player_id uuid not null default auth.uid() references public.players (id) on delete cascade,
   place_id text not null,
   checked_at timestamptz not null default now(),
+  -- Where the phone was, and how sure it was (metres), when checking in.
+  latitude double precision not null,
+  longitude double precision not null,
+  accuracy double precision not null check (accuracy >= 0),
   -- The game day in New Jersey time, set by the database.
   game_day date not null,
   unique (player_id, place_id, game_day)
@@ -45,12 +49,26 @@ create table public.check_ins (
 
 create index check_ins_place on public.check_ins (place_id, checked_at);
 
+-- Distance in metres between two points (haversine; plenty for 80 m checks).
+create function public.distance_m(lat1 double precision, lon1 double precision,
+                                  lat2 double precision, lon2 double precision)
+returns double precision language sql immutable as $$
+  select 2 * 6371000 * asin(sqrt(
+    power(sin(radians(lat2 - lat1) / 2), 2) +
+    cos(radians(lat1)) * cos(radians(lat2)) * power(sin(radians(lon2 - lon1) / 2), 2)))
+$$;
+
 -- The server's clock decides when things happened; a phone can't backdate them.
 create function public.stamp_rating() returns trigger
 language plpgsql as $$
 begin
   new.rated_at := now();
   new.rejected := false;
+  -- Typed-in receipt details always mean the receipt needs a review (D18),
+  -- whatever the phone sent.
+  if new.typed_business is not null or new.typed_date is not null then
+    new.pending := array(select distinct unnest(new.pending || array['typedReceipt']));
+  end if;
   return new;
 end $$;
 
@@ -59,14 +77,22 @@ create trigger ratings_stamp before insert on public.ratings
 
 create function public.stamp_check_in() returns trigger
 language plpgsql as $$
+declare
+  place record;
 begin
   new.checked_at := now();
   new.game_day := (now() at time zone 'America/New_York')::date;
-  if not exists (
-    select 1 from public.ratings r
-    where r.player_id = new.player_id and r.place_id = new.place_id and not r.rejected
-  ) then
+  select r.latitude, r.longitude into place from public.ratings r
+   where r.player_id = new.player_id and r.place_id = new.place_id and not r.rejected;
+  if not found then
     raise exception 'Rate this place before checking in.' using errcode = 'P0001';
+  end if;
+  -- Same reach as the app (D12): a usable fix within 80 m of the place.
+  if new.accuracy > 100 then
+    raise exception 'Location is too rough to check in.' using errcode = 'P0001';
+  end if;
+  if public.distance_m(new.latitude, new.longitude, place.latitude, place.longitude) > 80 then
+    raise exception 'Check in at the place, within 80 m.' using errcode = 'P0001';
   end if;
   return new;
 end $$;
