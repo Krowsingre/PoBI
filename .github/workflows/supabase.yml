@@ -51,7 +51,12 @@ jobs:
       - name: Link the project
         run: |
           url=$(printf '%s' "$RAW_URL" | tr -d '[:space:]')
-          ref=$(printf '%s' "$url" | sed -E 's#^https?://([^.]+)\..*$#\1#')
+          # The project ref is the 20-letter id in https://<ref>.supabase.co, wherever it sits in the value.
+          ref=$(printf '%s' "$url" | grep -oE '[a-z]{20}' | head -n 1 || true)
+          if [ -z "$ref" ]; then
+            echo "::error::SUPABASE_URL should look like https://<20-letter project id>.supabase.co (value has ${#url} characters, no 20-letter id found)"
+            exit 1
+          fi
           echo "::add-mask::$ref"
           echo "PROJECT_REF=$ref" >> "$GITHUB_ENV"
           echo "SUPABASE_ACCESS_TOKEN=$(printf '%s' "$RAW_TOKEN" | tr -d '[:space:]')" >> "$GITHUB_ENV"
@@ -59,12 +64,12 @@ jobs:
       - name: Preview (pull requests)
         if: github.event_name == 'pull_request'
         run: |
-          supabase link --project-ref "$PROJECT_REF" -p "$SUPABASE_DB_PASSWORD"
+          supabase link --project-ref "$PROJECT_REF"
           supabase db push --dry-run -p "$SUPABASE_DB_PASSWORD"
       - name: Apply migrations
         if: github.event_name != 'pull_request'
         run: |
-          supabase link --project-ref "$PROJECT_REF" -p "$SUPABASE_DB_PASSWORD"
+          supabase link --project-ref "$PROJECT_REF"
           supabase db push -p "$SUPABASE_DB_PASSWORD"
       - name: Turn on guest sign-in
         # Players start as anonymous (guest) accounts, so the app needs no sign-up screen yet.
