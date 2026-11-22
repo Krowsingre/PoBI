@@ -73,13 +73,15 @@ jobs:
           supabase db push --remote --yes
       - name: Turn on guest sign-in
         # Players start as anonymous (guest) accounts, so the app needs no sign-up screen yet.
-        if: github.event_name != 'pull_request'
         run: |
           curl -sS --fail-with-body -X PATCH \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"external_anon_users_enabled": true}' > /dev/null
+            -d '{"external_anonymous_users_enabled": true}' > /dev/null
+          on=$(curl -sS --fail-with-body "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" | jq -r '.external_anonymous_users_enabled')
+          if [ "$on" != "true" ]; then echo "::error::Guest sign-in is still off (got $on)"; exit 1; fi
           echo "Guest sign-in is on."
 
   smoke:
