@@ -24,12 +24,15 @@ actor ServerClient {
         case http(Int, String)
         /// The server's rules refused the request (for example, too far away to check in).
         case refused(String)
+        /// The account was reset while this request was running; its result is dropped.
+        case accountReset
 
         var errorDescription: String? {
             switch self {
             case .notConfigured: return "This build isn't connected to the game server."
             case .http(let code, _): return "The game server answered with an error (\(code))."
             case .refused(let message): return message
+            case .accountReset: return "The account was reset."
             }
         }
     }
@@ -38,6 +41,8 @@ actor ServerClient {
 
     let config: Config?
     private var session: Session?
+    /// Goes up on every sign-out, so answers to requests started before it are ignored.
+    private var generation = 0
 
     init(config: Config?) {
         self.config = config
@@ -66,15 +71,17 @@ actor ServerClient {
     private func validSession() async throws -> Session {
         guard config != nil else { throw ServerError.notConfigured }
         if let session, session.expiresAt.timeIntervalSinceNow > 60 { return session }
+        let started = generation
         if let session {
             do {
-                return try await store(auth(path: "token?grant_type=refresh_token",
-                                            body: ["refresh_token": session.refreshToken]))
+                return try store(await auth(path: "token?grant_type=refresh_token",
+                                            body: ["refresh_token": session.refreshToken]), started: started)
             } catch ServerError.http(let code, _) where (400..<500).contains(code) {
-                // The refresh token is no longer valid; start a new guest account below.
+                // The refresh token is no longer valid. A new guest account follows below;
+                // GameStore notices the new player ID and re-sends everything to it.
             }
         }
-        return try await store(auth(path: "signup", body: [:]))
+        return try store(await auth(path: "signup", body: [:]), started: started)
     }
 
     private func auth(path: String, body: [String: String]) async throws -> AuthResponse {
@@ -89,7 +96,9 @@ actor ServerClient {
         return try JSONDecoder().decode(AuthResponse.self, from: data)
     }
 
-    private func store(_ auth: AuthResponse) -> Session {
+    private func store(_ auth: AuthResponse, started: Int) throws -> Session {
+        // A sign-out happened while this request was out: don't bring the old account back.
+        guard started == generation else { throw ServerError.accountReset }
         let session = Session(
             accessToken: auth.access_token, refreshToken: auth.refresh_token,
             expiresAt: Date.now.addingTimeInterval(auth.expires_in), userID: auth.user.id
@@ -101,6 +110,7 @@ actor ServerClient {
 
     /// Forgets this phone's guest account (used by "Reset test data").
     func signOut() {
+        generation += 1
         session = nil
         Keychain.delete()
     }
@@ -108,7 +118,9 @@ actor ServerClient {
     // MARK: Data
 
     /// Creates the player's row if it doesn't exist yet, and sets the team once.
-    func registerPlayer(team: Team?) async throws {
+    /// Returns the player's ID on the server.
+    @discardableResult
+    func registerPlayer(team: Team?) async throws -> String {
         let session = try await validSession()
         try await rest("players", method: "POST", body: ["id": session.userID],
                        prefer: "resolution=ignore-duplicates,return=minimal")
@@ -117,6 +129,7 @@ actor ServerClient {
             try await rest("players?id=eq.\(session.userID)&team=is.null", method: "PATCH",
                            body: ["team": team.rawValue], prefer: "return=minimal")
         }
+        return session.userID
     }
 
     struct RatingUpload: Encodable {
@@ -155,6 +168,7 @@ actor ServerClient {
     private func rest<Body: Encodable>(_ path: String, method: String, body: Body,
                                        prefer: String, conflictIsOK: Bool = false) async throws {
         guard let config else { throw ServerError.notConfigured }
+        let started = generation
         let session = try await validSession()
         var request = URLRequest(url: URL(string: "rest/v1/\(path)", relativeTo: config.url)!)
         request.httpMethod = method
@@ -164,6 +178,7 @@ actor ServerClient {
         request.setValue(prefer, forHTTPHeaderField: "Prefer")
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await URLSession.shared.data(for: request)
+        guard started == generation else { throw ServerError.accountReset }
         if conflictIsOK, (response as? HTTPURLResponse)?.statusCode == 409 { return }
         try Self.check(response, data)
     }

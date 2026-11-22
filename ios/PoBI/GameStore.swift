@@ -28,6 +28,11 @@ final class GameStore: ObservableObject {
     /// Check-ins the server refused, with its reason (for example, too far from the place).
     @Published private(set) var refused: [UUID: String] = [:]
     private var syncing = false
+    private var syncAgain = false
+    /// Goes up on "Reset test data", so a sync that started before it drops its results.
+    private var accountGeneration = 0
+    /// The server account that `synced` refers to.
+    private var syncedPlayerID: String?
 
     /// Used when the phone's location isn't known yet: central New Jersey.
     static let defaultCenter = CLLocationCoordinate2D(latitude: 40.22, longitude: -74.55)
@@ -48,6 +53,7 @@ final class GameStore: ObservableObject {
         var drafts: [String: PhotoDraft]?
         var synced: Set<UUID>?
         var refused: [UUID: String]?
+        var syncedPlayerID: String?
     }
 
     init() {
@@ -59,6 +65,7 @@ final class GameStore: ObservableObject {
             drafts = saved.drafts ?? [:]
             synced = saved.synced ?? []
             refused = saved.refused ?? [:]
+            syncedPlayerID = saved.syncedPlayerID
         }
         dropExpiredDrafts()
         Task {
@@ -241,6 +248,9 @@ final class GameStore: ObservableObject {
         drafts = [:]
         synced = []
         refused = [:]
+        syncedPlayerID = nil
+        accountGeneration += 1
+        syncState = ServerClient.shared.isConfigured ? .idle : .notConfigured
         // A fresh guest account, so the server's copy of the old ratings doesn't block re-rating.
         Task { await ServerClient.shared.signOut() }
         try? FileManager.default.removeItem(at: Self.photosDirectory)
@@ -262,18 +272,40 @@ final class GameStore: ObservableObject {
     }()
 
     /// Sends the player's team, ratings and check-ins the server doesn't have yet.
-    /// Safe to call often; it does nothing while a sync is running or without a server.
+    /// Safe to call often: a call made during a sync makes that sync run once more.
     func sync() async {
-        guard ServerClient.shared.isConfigured, team != nil, catalogLoaded, !syncing else { return }
+        guard ServerClient.shared.isConfigured, team != nil, catalogLoaded else { return }
+        guard !syncing else {
+            syncAgain = true
+            return
+        }
         syncing = true
         syncState = .syncing
         defer { syncing = false }
+        repeat {
+            syncAgain = false
+            await syncOnce()
+        } while syncAgain && syncState != .notConfigured
+    }
+
+    private func syncOnce() async {
         let server = ServerClient.shared
+        let generation = accountGeneration
         do {
-            try await server.registerPlayer(team: team)
+            let playerID = try await server.registerPlayer(team: team)
+            guard generation == accountGeneration else { return }
+            if playerID != syncedPlayerID {
+                // A different server account (first sync, or the old one was lost):
+                // everything has to go to this one.
+                synced = []
+                refused = [:]
+                syncedPlayerID = playerID
+                save()
+            }
             // Ratings first: the server only accepts a check-in at a place you've rated.
-            for rating in ratings where !synced.contains(rating.id) {
-                guard let place = place(id: rating.placeID) else { continue }
+            // Re-read the list each time, so ratings added during the sync go too.
+            while let rating = ratings.first(where: { !synced.contains($0.id) && place(id: $0.placeID) != nil }),
+                  let place = place(id: rating.placeID) {
                 try await server.upload(ServerClient.RatingUpload(
                     id: rating.id, place_id: place.id,
                     latitude: place.latitude, longitude: place.longitude,
@@ -283,10 +315,14 @@ final class GameStore: ObservableObject {
                     typed_business: rating.typedReceipt?.business,
                     typed_date: rating.typedReceipt.map { $0.date.formatted(Self.dayFormat) }
                 ))
+                guard generation == accountGeneration else { return }
                 synced.insert(rating.id)
                 save()
             }
+            let sentRatings = Set(ratings.filter { synced.contains($0.id) }.map(\.placeID))
             for checkIn in checkIns where !synced.contains(checkIn.id) {
+                // Wait for the place's rating to reach the server first.
+                guard sentRatings.contains(checkIn.placeID) else { continue }
                 guard let latitude = checkIn.latitude, let longitude = checkIn.longitude,
                       let accuracy = checkIn.accuracy else {
                     // Made before this build recorded locations; the server can't check it.
@@ -299,13 +335,18 @@ final class GameStore: ObservableObject {
                         latitude: latitude, longitude: longitude, accuracy: accuracy
                     ))
                 } catch ServerClient.ServerError.refused(let reason) {
+                    guard generation == accountGeneration else { return }
                     refused[checkIn.id] = reason
                 }
+                guard generation == accountGeneration else { return }
                 synced.insert(checkIn.id)
                 save()
             }
             syncState = .synced(.now)
+        } catch ServerClient.ServerError.accountReset {
+            return
         } catch {
+            guard generation == accountGeneration else { return }
             save()
             syncState = .failed(error.localizedDescription)
         }
@@ -346,7 +387,7 @@ final class GameStore: ObservableObject {
 
     private func save() {
         let saved = Saved(team: team, ratings: ratings, checkIns: checkIns, drafts: drafts,
-                          synced: synced, refused: refused)
+                          synced: synced, refused: refused, syncedPlayerID: syncedPlayerID)
         if let data = try? JSONEncoder().encode(saved) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
