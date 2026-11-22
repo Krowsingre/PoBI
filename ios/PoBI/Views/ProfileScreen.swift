@@ -33,6 +33,9 @@ struct ProfileScreen: View {
                 }
                 Section("Your stats") {
                     LabeledContent("Places rated", value: "\(store.ratings.count)")
+                    if store.ratings.contains(where: \.isPending) {
+                        LabeledContent("Waiting for review or a revisit", value: "\(store.ratings.filter(\.isPending).count)")
+                    }
                     LabeledContent("Plate It", value: "\(store.ratings.filter { $0.verdict == .plateIt }.count)")
                     LabeledContent("Break It", value: "\(store.ratings.filter { $0.verdict == .breakIt }.count)")
                     LabeledContent("Check-ins", value: "\(store.checkIns.count)")

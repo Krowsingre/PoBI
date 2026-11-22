@@ -94,6 +94,54 @@ struct Rating: Identifiable, Codable, Hashable {
     let date: Date
     /// True when the place didn't allow food photos and the photo shows the storefront instead (D16).
     var storefrontPhoto: Bool? = nil
+    /// Why the rating doesn't count yet. Empty or nil means it counts.
+    var pending: [PendingReason]? = nil
+    /// What the player typed when the app couldn't read the receipt (D18).
+    var typedReceipt: TypedReceipt? = nil
+
+    var isPending: Bool { !(pending ?? []).isEmpty }
+
+    /// How long a check-in can clear a missing food photo (D19).
+    static let revisitDays = 30
+
+    /// The last moment a check-in at the place clears a missing food photo.
+    var revisitDeadline: Date {
+        let calendar = GameStore.calendar
+        let start = calendar.startOfDay(for: date)
+        return calendar.date(byAdding: .day, value: Self.revisitDays + 1, to: start) ?? date
+    }
+
+    /// One line on what the rating is waiting for, or nil when it counts.
+    func pendingText(now: Date = .now) -> String? {
+        let reasons = pending ?? []
+        guard !reasons.isEmpty else { return nil }
+        var parts: [String] = []
+        if reasons.contains(.typedReceipt) {
+            parts.append("the receipt photo needs a review")
+        }
+        if reasons.contains(.noFoodPhoto) {
+            if now < revisitDeadline {
+                let day = revisitDeadline.addingTimeInterval(-1).formatted(.dateTime.month().day())
+                parts.append("check in here by \(day) (or pass a receipt review) to make up for the missing food photo")
+            } else {
+                parts.append("the missing food photo needs a receipt review")
+            }
+        }
+        return "Pending: " + parts.joined(separator: ", and ") + ". It doesn't count for your team until then."
+    }
+}
+
+/// Why a rating is waiting before it counts.
+enum PendingReason: String, Codable, Hashable {
+    /// The app couldn't read the receipt, so the player typed the details (D18).
+    case typedReceipt
+    /// The player left without taking the food or storefront photo (D19).
+    case noFoodPhoto
+}
+
+struct TypedReceipt: Codable, Hashable {
+    let business: String
+    let date: Date
 }
 
 /// A food or storefront photo taken at the place, kept so the rating can be finished later (D17).
@@ -144,6 +192,7 @@ enum GameError: LocalizedError {
     case missingPhotos
     case notHere
     case photoNotAtPlace
+    case missingReceipt
 
     var errorDescription: String? {
         switch self {
@@ -153,6 +202,7 @@ enum GameError: LocalizedError {
         case .missingPhotos: return "Take a receipt photo and a food or storefront photo."
         case .notHere: return "You need to be at the place to check in."
         case .photoNotAtPlace: return "Take this photo at the place, within \(GameStore.checkInReachText)."
+        case .missingReceipt: return "Take a photo of the receipt. It's kept for the review."
         }
     }
 }

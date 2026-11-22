@@ -4,7 +4,9 @@ import SwiftUI
 /// You can rate from anywhere (D11), but the receipt must be dated within the last 7 days,
 /// and both photos are taken with the app's camera (D13). Where food photos aren't allowed,
 /// a storefront photo stands in (D16). That photo must be taken at the place, and can be finished
-/// into a rating from anywhere within 7 days (D17).
+/// into a rating from anywhere within 7 days (D17). If the app can't read the receipt, the player
+/// types it in (D18); if they left without the photo, they can still rate (D19). Both make the
+/// rating pending until it's reviewed or, for a missing photo, until they check in there.
 struct RateView: View {
     @EnvironmentObject private var store: GameStore
     @EnvironmentObject private var location: LocationManager
@@ -17,6 +19,7 @@ struct RateView: View {
     }
 
     @State private var shooting: Shot?
+    @State private var receiptImage: UIImage?
     @State private var receiptCheck: ReceiptReader.Result?
     @State private var receiptMatch: ReceiptMatcher.Result?
     @State private var checkingReceipt = false
@@ -25,6 +28,12 @@ struct RateView: View {
     @State private var dishImage: UIImage?
     /// The place doesn't allow food photos, so a photo of the outside or sign stands in (D16).
     @State private var noPhotosAllowed = false
+    /// The app couldn't read the receipt, so the player types the business and date (D18).
+    @State private var typingReceipt = false
+    @State private var typedBusiness = ""
+    @State private var typedDate = Date.now
+    /// The player left without taking the food or storefront photo (D19).
+    @State private var forgotPhoto = false
     @State private var verdict: Verdict = .plateIt
     @State private var stars = 2
     @State private var error: String?
@@ -34,8 +43,35 @@ struct RateView: View {
         return true
     }
 
+    /// Receipt reads that typing can't override: a clear date that's too old, or another branch's receipt.
+    private var receiptClearlyWrong: Bool {
+        if case .tooOld = receiptCheck { return true }
+        if case .otherBranch = receiptMatch { return true }
+        return false
+    }
+
+    private var canTypeReceipt: Bool {
+        receiptImage != nil && receiptCheck != nil && !receiptOK && !receiptClearlyWrong
+    }
+
+    private var earliestReceiptDate: Date {
+        let calendar = GameStore.calendar
+        return calendar.date(byAdding: .day, value: -ReceiptReader.maxAgeDays, to: calendar.startOfDay(for: .now)) ?? .now
+    }
+
+    private var typedReceipt: TypedReceipt? {
+        guard canTypeReceipt, typingReceipt else { return nil }
+        let business = typedBusiness.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !business.isEmpty, typedDate >= earliestReceiptDate, typedDate <= .now else { return nil }
+        return TypedReceipt(business: business, date: typedDate)
+    }
+
+    private var hasPhoto: Bool { dishImage != nil && store.draft(for: place) != nil }
+    private var skippingPhoto: Bool { forgotPhoto && !hasPhoto }
+    private var willBePending: Bool { typedReceipt != nil || skippingPhoto }
+
     private var canSubmit: Bool {
-        receiptOK && dishImage != nil && store.draft(for: place) != nil && !checkingReceipt && !checkingPhoto
+        (receiptOK || typedReceipt != nil) && (hasPhoto || skippingPhoto) && !checkingReceipt && !checkingPhoto
     }
 
     private var presence: CheckInStatus { store.presence(at: place, from: location.location) }
@@ -58,10 +94,22 @@ struct RateView: View {
                     }
                     .disabled(!CameraPicker.isAvailable || checkingReceipt)
                     receiptStatus
+                    if canTypeReceipt {
+                        Toggle("Can't scan it? Type it in", isOn: $typingReceipt)
+                        if typingReceipt {
+                            TextField("Business name on the receipt", text: $typedBusiness)
+                                .textInputAutocapitalization(.words)
+                            DatePicker("Date on the receipt", selection: $typedDate,
+                                       in: earliestReceiptDate...Date.now, displayedComponents: .date)
+                            Text("Your rating will be pending until someone checks the receipt photo.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 } header: {
                     Text("Receipt")
                 } footer: {
-                    Text("The receipt must be from this place and the last 7 days, with the name and date in the photo. It's read on your phone and never saved.")
+                    Text("The receipt must be from this place and the last 7 days, with the name and date in the photo. It's read on your phone, and only kept if your rating needs a review.")
                 }
 
                 Section {
@@ -79,6 +127,11 @@ struct RateView: View {
                         // The saved photo is only replaced once a new one is taken at the place.
                         Button("Retake photo") { shooting = .dish }
                             .disabled(!CameraPicker.isAvailable || presence != .allowed || checkingPhoto)
+                    } else if forgotPhoto {
+                        Toggle("I left without taking it", isOn: $forgotPhoto)
+                        Text("Your rating will be pending. It counts once you check in here within \(Rating.revisitDays) days, or once the receipt passes a review.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     } else {
                         Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
                         Button {
@@ -98,6 +151,9 @@ struct RateView: View {
                         }
                         if let hint = photoHint {
                             Text(hint).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        if presence != .allowed {
+                            Toggle("I left without taking it", isOn: $forgotPhoto)
                         }
                     }
                 } header: {
@@ -140,7 +196,7 @@ struct RateView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Submit") { submit() }
+                    Button(willBePending ? "Submit for review" : "Submit") { submit() }
                         .disabled(!canSubmit)
                 }
             }
@@ -149,6 +205,7 @@ struct RateView: View {
                     dishImage = store.draftPhoto(for: place)
                     noPhotosAllowed = draft.storefront
                 }
+                if typedBusiness.isEmpty { typedBusiness = place.name }
             }
             .fullScreenCover(item: $shooting) { shot in
                 CameraPicker { image in
@@ -250,6 +307,7 @@ struct RateView: View {
     }
 
     private func checkReceipt(_ image: UIImage) {
+        receiptImage = image
         receiptCheck = nil
         receiptMatch = nil
         checkingReceipt = true
@@ -268,7 +326,12 @@ struct RateView: View {
             return
         }
         do {
-            try store.rate(place, verdict: verdict, stars: stars)
+            try store.rate(
+                place, verdict: verdict, stars: stars,
+                receiptPhoto: receiptImage,
+                typedReceipt: receiptOK ? nil : typedReceipt,
+                withoutPhoto: skippingPhoto
+            )
             dismiss()
         } catch {
             self.error = error.localizedDescription

@@ -128,19 +128,56 @@ final class GameStore: ObservableObject {
         save()
     }
 
-    /// Finishes a rating from the photo taken at the place. Works from anywhere within 7 days.
-    func rate(_ place: Place, verdict: Verdict, stars: Int) throws {
+    /// Saves a rating. Works from anywhere within 7 days of the visit.
+    /// - Normally it uses the photo taken at the place (D17) and a receipt the app could read.
+    /// - `typedReceipt`: the app couldn't read the receipt, so the player typed it in (D18).
+    /// - `withoutPhoto`: the player left without taking the food photo (D19).
+    /// Either makes the rating pending, and the receipt photo is kept for review.
+    func rate(
+        _ place: Place, verdict: Verdict, stars: Int,
+        receiptPhoto: UIImage? = nil, typedReceipt: TypedReceipt? = nil, withoutPhoto: Bool = false
+    ) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
-        guard let draft = draft(for: place), let photo = draftPhoto(for: place),
-              let data = photo.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
+        var reasons: [PendingReason] = []
+        if typedReceipt != nil { reasons.append(.typedReceipt) }
+        var photoData: Data?
+        var storefront = false
+        if withoutPhoto {
+            reasons.append(.noFoodPhoto)
+        } else {
+            guard let draft = draft(for: place), let photo = draftPhoto(for: place),
+                  let data = photo.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
+            photoData = data
+            storefront = draft.storefront
+        }
+        // A pending rating keeps its receipt photo so it can be reviewed.
+        var receiptData: Data?
+        if !reasons.isEmpty {
+            guard let receiptPhoto,
+                  let data = ImageResizer.downscale(receiptPhoto, maxSide: 1600).jpegData(compressionQuality: 0.7)
+            else { throw GameError.missingReceipt }
+            receiptData = data
+        }
         let rating = Rating(
             id: UUID(), placeID: place.id, verdict: verdict, stars: min(max(stars, 1), 3), date: .now,
-            storefrontPhoto: draft.storefront ? true : nil
+            storefrontPhoto: storefront ? true : nil,
+            pending: reasons.isEmpty ? nil : reasons,
+            typedReceipt: typedReceipt
         )
-        try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
-        try data.write(to: Self.photoURL(for: rating))
+        if let photoData {
+            try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
+            try photoData.write(to: Self.photoURL(for: rating))
+        }
+        if let receiptData {
+            try FileManager.default.createDirectory(at: Self.receiptsDirectory, withIntermediateDirectories: true)
+            try receiptData.write(to: Self.receiptURL(for: rating))
+        }
         ratings.append(rating)
-        discardDraft(for: place)
+        if photoData != nil {
+            discardDraft(for: place)
+        } else {
+            save()
+        }
     }
 
     private func isExpired(_ draft: PhotoDraft, now: Date) -> Bool {
@@ -165,7 +202,15 @@ final class GameStore: ObservableObject {
         case .noLocation, .roughLocation, .tooFar: throw GameError.notHere
         case .allowed: break
         }
-        checkIns.append(CheckIn(id: UUID(), placeID: place.id, date: .now))
+        let now = Date.now
+        checkIns.append(CheckIn(id: UUID(), placeID: place.id, date: now))
+        // Coming back within 30 days makes up for a missing food photo (D19).
+        if let index = ratings.firstIndex(where: { $0.placeID == place.id }),
+           var reasons = ratings[index].pending, reasons.contains(.noFoodPhoto),
+           now < ratings[index].revisitDeadline {
+            reasons.removeAll { $0 == .noFoodPhoto }
+            ratings[index].pending = reasons.isEmpty ? nil : reasons
+        }
         save()
     }
 
@@ -175,6 +220,7 @@ final class GameStore: ObservableObject {
         drafts = [:]
         try? FileManager.default.removeItem(at: Self.photosDirectory)
         try? FileManager.default.removeItem(at: Self.draftsDirectory)
+        try? FileManager.default.removeItem(at: Self.receiptsDirectory)
         team = nil
     }
 
@@ -186,6 +232,15 @@ final class GameStore: ObservableObject {
 
     static var draftsDirectory: URL {
         URL.documentsDirectory.appending(path: "photo-drafts", directoryHint: .isDirectory)
+    }
+
+    /// Receipt photos kept only for pending ratings, until they're reviewed.
+    static var receiptsDirectory: URL {
+        URL.documentsDirectory.appending(path: "receipts-for-review", directoryHint: .isDirectory)
+    }
+
+    static func receiptURL(for rating: Rating) -> URL {
+        receiptsDirectory.appending(path: "\(rating.id.uuidString).jpg")
     }
 
     static func draftURL(for placeID: String) -> URL {
