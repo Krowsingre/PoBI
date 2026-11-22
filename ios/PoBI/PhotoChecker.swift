@@ -15,7 +15,6 @@ enum PhotoChecker {
         "ice_cream", "pastry", "noodle", "pasta", "taco", "burrito", "fries", "seafood", "meat", "breakfast",
         "donut", "doughnut", "bagel", "cookie", "chocolate", "rice", "egg", "cheese", "sausage", "chicken",
         "steak", "dumpling", "pancake", "waffle", "pie", "juice", "smoothie", "beer", "wine", "cocktail",
-        "plate", "bowl", "cup", "mug", "bottle", "tableware", "utensil",
     ]
     private static let storefrontWords = [
         "building", "structure", "storefront", "store", "shop", "sign", "signage", "restaurant", "street",

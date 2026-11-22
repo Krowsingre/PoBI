@@ -69,23 +69,35 @@ enum ReceiptMatcher {
         let text = lines.joined(separator: "\n")
         guard names(place, appearIn: text) else { return .nameNotFound }
         let squashed = normalize(text)
-
-        // Phone numbers: a match confirms this branch; another branch's number rejects it.
         let receiptPhones = phones(in: text)
-        if !place.phone.isEmpty, receiptPhones.contains(place.phone) { return .matches(branchConfirmed: true) }
-        for phone in receiptPhones {
-            if let other = catalog.places(withPhone: phone).first(where: { $0.id != place.id && sameBusiness($0, place) }) {
-                return .otherBranch(other)
-            }
+
+        // The catalogue sometimes lists one shop twice, so listings at the same spot count as this place.
+        func sameSpot(_ other: Place) -> Bool {
+            if other.id == place.id { return true }
+            if let a = addressKey(other.address), a == addressKey(place.address) { return true }
+            return other.location.distance(from: place.location) < 150
         }
 
-        // Street addresses work the same way.
+        // A street address is the strongest sign of which branch it was. Check it before phone numbers,
+        // because some branches share one phone number.
         if let key = addressKey(place.address), squashed.contains(key) { return .matches(branchConfirmed: true) }
-        for other in catalog.branches(of: place) {
-            if let key = addressKey(other.address), key.count >= 4, squashed.contains(key) {
-                return .otherBranch(other)
-            }
+        let branches = catalog.branches(of: place).filter { !sameSpot($0) }
+        if let other = branches.first(where: { other in
+            guard let key = addressKey(other.address), key.count >= 4 else { return false }
+            return squashed.contains(key)
+        }) {
+            return .otherBranch(other)
         }
+
+        // Phone numbers: one that only this place uses confirms it; one only another branch uses rejects it.
+        for phone in receiptPhones {
+            let listed = catalog.places(withPhone: phone).filter { sameBusiness($0, place) || $0.id == place.id }
+            let here = listed.contains(where: sameSpot)
+            let elsewhere = listed.filter { !sameSpot($0) }
+            if here && elsewhere.isEmpty { return .matches(branchConfirmed: true) }
+            if !here, let other = elsewhere.first { return .otherBranch(other) }
+        }
+
         // No branch details on the receipt. The food photo taken at the place shows which branch it was.
         return .matches(branchConfirmed: false)
     }
