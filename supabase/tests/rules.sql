@@ -152,6 +152,40 @@ select replace_owners('[{"area":"B","team":"team3","boundary":[[1,2]]}]', '[]', 
 insert into expect select 'owner swap replaces the whole result',
   (select count(*) = 1 and bool_and(area = 'B') from area_owners) and (select count(*) = 0 from place_owners);
 
+-- App Attest: rows that come through the edge function carry its secret header.
+insert into places values ('p7', 40.8, -74.8, '882a10000ffffff'), ('p8', 40.9, -74.9, '882a10000ffffff');
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, attested)
+  values (gen_random_uuid(), 'p7', 0, 0, 'plateIt', 1, true);
+insert into expect select 'players cannot mark their own rows attested',
+  (select not attested from ratings where place_id = 'p7');
+do $$ begin
+  perform 1 from app_keys;
+  insert into expect values ('players cannot read app keys', false);
+exception when insufficient_privilege then
+  insert into expect values ('players cannot read app keys', true);
+end $$;
+reset role;
+select set_config('request.headers', json_build_object('x-pobi-attest', (select secret from attest_settings))::text, false);
+update attest_settings set require_attest = true;
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars)
+  values (gen_random_uuid(), 'p8', 0, 0, 'plateIt', 1);
+insert into expect select 'rows with the function''s header are attested',
+  (select attested from ratings where place_id = 'p8');
+select set_config('request.headers', '{"x-pobi-attest":"guess"}', false);
+do $$ begin
+  insert into check_ins (id, place_id, latitude, longitude, accuracy) values (gen_random_uuid(), 'p8', 40.9, -74.9, 10);
+  insert into expect values ('when required, unattested rows are refused', false);
+exception when sqlstate 'PT426' then
+  insert into expect values ('when required, unattested rows are refused', true);
+end $$;
+reset role;
+update attest_settings set require_attest = false;
+select set_config('request.headers', '', false);
+
 select name, ok from expect;
 do $$ begin
   if exists (select 1 from expect where not ok) then raise exception 'A rules check failed'; end if;

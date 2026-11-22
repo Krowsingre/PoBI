@@ -34,6 +34,11 @@ jobs:
           psql -v ON_ERROR_STOP=1 -q -f supabase/tests/auth_stub.sql
           for f in supabase/migrations/*.sql; do psql -v ON_ERROR_STOP=1 -q -f "$f"; done
           psql -v ON_ERROR_STOP=1 -q -f supabase/tests/rules.sql
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Test the App Attest function
+        run: deno test --allow-env supabase/functions/attest/handler.test.ts
 
   deploy:
     name: Apply to Supabase
@@ -43,6 +48,7 @@ jobs:
       RAW_URL: ${{ secrets.SUPABASE_URL }}
       RAW_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       RAW_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      RAW_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
@@ -71,6 +77,13 @@ jobs:
         run: |
           supabase link --project-ref "$PROJECT_REF"
           supabase db push --remote --yes
+      - name: Deploy the App Attest function
+        if: github.event_name != 'pull_request'
+        run: |
+          team=$(printf '%s' "$RAW_TEAM_ID" | tr -d '[:space:]')
+          if [ -z "$team" ]; then echo "::error::APPLE_TEAM_ID secret is empty"; exit 1; fi
+          supabase secrets set --project-ref "$PROJECT_REF" "APPLE_TEAM_ID=$team"
+          supabase functions deploy attest --project-ref "$PROJECT_REF" --use-api
       - name: Turn on guest sign-in
         # Players start as anonymous (guest) accounts, so the app needs no sign-up screen yet.
         run: |
