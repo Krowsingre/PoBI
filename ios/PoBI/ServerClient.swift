@@ -1,3 +1,5 @@
+import CryptoKit
+import DeviceCheck
 import Foundation
 import Security
 
@@ -26,6 +28,8 @@ actor ServerClient {
         case refused(String)
         /// The account was reset while this request was running; its result is dropped.
         case accountReset
+        /// The server requires a verified app (App Attest). The upload is kept and retried.
+        case needsUpdate
 
         var errorDescription: String? {
             switch self {
@@ -33,6 +37,7 @@ actor ServerClient {
             case .http(let code, _): return "The game server answered with an error (\(code))."
             case .refused(let message): return message
             case .accountReset: return "The account was reset."
+            case .needsUpdate: return "Update Plate or Break It to keep sending your visits."
             }
         }
     }
@@ -113,6 +118,9 @@ actor ServerClient {
         generation += 1
         session = nil
         Keychain.delete()
+        AttestKeyStore.delete()
+        attestStatus = .notChecked
+        attestRetryAfter = nil
     }
 
     // MARK: Data
@@ -261,14 +269,134 @@ actor ServerClient {
 
     /// Uploads a rating. Uploading the same rating twice is harmless.
     func upload(_ rating: RatingUpload) async throws {
-        try await rest("ratings", method: "POST", body: rating,
-                       prefer: "resolution=ignore-duplicates,return=minimal", conflictIsOK: true)
+        try await insert("ratings", rating)
     }
 
     /// Uploads a check-in. The server checks it's within 80 m of the place, once a day.
     func upload(_ checkIn: CheckInUpload) async throws {
-        try await rest("check_ins", method: "POST", body: checkIn,
+        try await insert("check_ins", checkIn)
+    }
+
+    /// Sends a rating or check-in, signed with App Attest when this iPhone can.
+    /// Without it (simulator, or the check failed), it goes straight to the database,
+    /// which accepts it as not attested for as long as the server allows that.
+    private func insert<Body: Encodable>(_ table: String, _ body: Body) async throws {
+        guard config != nil else { throw ServerError.notConfigured }
+        let started = generation
+        let session = try await validSession()
+        let data = try Self.encoder.encode(body)
+        if let keyID = await attestedKey(for: session) {
+            do {
+                let hash = Data(SHA256.hash(data: data))
+                let assertion = try await DCAppAttestService.shared.generateAssertion(keyID, clientDataHash: hash)
+                let (answer, response) = try await callFunction([
+                    "action": "submit", "table": table, "keyId": keyID,
+                    "assertion": assertion.base64EncodedString(),
+                    "body": String(decoding: data, as: UTF8.self),
+                ], session: session)
+                guard started == generation else { throw ServerError.accountReset }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let reply = try? JSONSerialization.jsonObject(with: answer) as? [String: Any]
+                let code = reply?["code"] as? String
+                if code == "unknown_key" || code == "attest_failed" {
+                    // The server doesn't know this key or didn't accept its signature: make a new one next time.
+                    forgetAttestKey(reply?["message"] as? String ?? "Not accepted")
+                } else if status >= 500 || code == "replayed" {
+                    // The signing step is down or tripped over itself: send it directly this time.
+                } else {
+                    if status == 409 { return }
+                    try Self.check(response, answer)
+                    attestStatus = .verified
+                    return
+                }
+            } catch let error as DCError {
+                // A lost or broken key is replaced next time. Other App Attest errors just skip signing this once.
+                if error.code == .invalidKey || error.code == .invalidInput {
+                    forgetAttestKey(error.localizedDescription)
+                }
+            } catch is URLError {
+                // Couldn't reach the signing step: try the database directly below.
+            }
+        }
+        // Started before a reset: drop it rather than sending it to the new account.
+        guard started == generation else { throw ServerError.accountReset }
+        try await rest(table, method: "POST", body: body,
                        prefer: "resolution=ignore-duplicates,return=minimal", conflictIsOK: true)
+    }
+
+    // MARK: App Attest
+
+    enum AttestStatus: Equatable {
+        case notChecked
+        /// This device can't use App Attest (for example, the simulator).
+        case unsupported
+        case verified
+        case failed(String)
+    }
+
+    /// Whether this iPhone has proved to the server that it's running the real app.
+    private(set) var attestStatus: AttestStatus = .notChecked
+    /// After a failed attempt, wait before asking Apple again (it limits how often a phone can attest).
+    private var attestRetryAfter: Date?
+    private var registering: Task<String, Error>?
+
+    /// The App Attest key for this account, registering a new one with the server if needed.
+    private func attestedKey(for session: Session) async -> String? {
+        let service = DCAppAttestService.shared
+        guard service.isSupported else {
+            attestStatus = .unsupported
+            return nil
+        }
+        if let saved = AttestKeyStore.load(), saved.playerID == session.userID {
+            return saved.keyID
+        }
+        if let retry = attestRetryAfter, retry > .now { return nil }
+        let task = registering ?? Task { try await self.registerAttestKey(session: session) }
+        registering = task
+        defer { registering = nil }
+        do {
+            let keyID = try await task.value
+            attestStatus = .verified
+            return keyID
+        } catch {
+            attestStatus = .failed(error.localizedDescription)
+            attestRetryAfter = Date.now.addingTimeInterval(60 * 60)
+            return nil
+        }
+    }
+
+    private func registerAttestKey(session: Session) async throws -> String {
+        struct Challenge: Decodable { let challenge: String }
+        let service = DCAppAttestService.shared
+        let keyID = try await service.generateKey()
+        let (data, response) = try await callFunction(["action": "challenge"], session: session)
+        try Self.check(response, data)
+        let challenge = try JSONDecoder().decode(Challenge.self, from: data).challenge
+        let attestation = try await service.attestKey(keyID, clientDataHash: Data(SHA256.hash(data: Data(challenge.utf8))))
+        let (answer, registered) = try await callFunction([
+            "action": "register", "keyId": keyID,
+            "attestation": attestation.base64EncodedString(), "challenge": challenge,
+        ], session: session)
+        try Self.check(registered, answer)
+        AttestKeyStore.save(.init(playerID: session.userID, keyID: keyID))
+        return keyID
+    }
+
+    private func forgetAttestKey(_ reason: String) {
+        AttestKeyStore.delete()
+        attestStatus = .failed(reason)
+        attestRetryAfter = Date.now.addingTimeInterval(60 * 60)
+    }
+
+    private func callFunction(_ body: [String: String], session: Session) async throws -> (Data, URLResponse) {
+        guard let config else { throw ServerError.notConfigured }
+        var request = URLRequest(url: URL(string: "functions/v1/attest", relativeTo: config.url)!)
+        request.httpMethod = "POST"
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await URLSession.shared.data(for: request)
     }
 
     /// An area a team owns, with its hexagon's corners as [latitude, longitude] pairs.
@@ -315,14 +443,18 @@ actor ServerClient {
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(prefer, forHTTPHeaderField: "Prefer")
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        request.httpBody = try encoder.encode(body)
+        request.httpBody = try Self.encoder.encode(body)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard started == generation else { throw ServerError.accountReset }
         if conflictIsOK, (response as? HTTPURLResponse)?.statusCode == 409 { return }
         try Self.check(response, data)
     }
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
 
     private static func check(_ response: URLResponse, _ data: Data) throws {
         guard let http = response as? HTTPURLResponse else { throw ServerError.http(0, "") }
@@ -333,8 +465,46 @@ actor ServerClient {
                json["code"] as? String == "P0001", let message = json["message"] as? String {
                 throw ServerError.refused(message)
             }
+            // 426: the server now requires App Attest and this upload didn't have it. Kept and retried.
+            if http.statusCode == 426 { throw ServerError.needsUpdate }
             throw ServerError.http(http.statusCode, text)
         }
+    }
+}
+
+/// The App Attest key ID for the current account. The key itself never leaves the Secure Enclave.
+private enum AttestKeyStore {
+    struct Saved: Codable {
+        let playerID: String
+        let keyID: String
+    }
+
+    private static let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "com.krowsingre.pobi.server",
+        kSecAttrAccount as String: "attest-key",
+    ]
+
+    static func load() -> Saved? {
+        var item: CFTypeRef?
+        var search = query
+        search[kSecReturnData as String] = true
+        guard SecItemCopyMatching(search as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return try? JSONDecoder().decode(Saved.self, from: data)
+    }
+
+    static func save(_ saved: Saved) {
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func delete() {
+        SecItemDelete(query as CFDictionary)
     }
 }
 

@@ -44,7 +44,7 @@ expect "rate" 201 "$(call POST ratings "$body" "resolution=ignore-duplicates,ret
 expect "same rating again is harmless" 201 "$(call POST ratings "$body" "resolution=ignore-duplicates,return=minimal")"
 printf '\xff\xd8\xff\xd9' > /tmp/receipt.jpg
 code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/storage/v1/object/receipts/$uid/$rating.jpg" \
-  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: image/jpeg" -H "x-upsert: true" \
+  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: image/jpeg" \
   --data-binary @/tmp/receipt.jpg)
 expect "upload a receipt photo to your own folder" 200 "$code"
 code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/storage/v1/object/receipts/someone-else/$rating.jpg" \
@@ -60,3 +60,11 @@ expect "far check-in refused" 400 "$code"
 grep -q P0001 /tmp/out && echo "ok: refusal carries the rule's message: $(jq -r .message /tmp/out)"
 near="{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"place_id\":\"$place_id\",\"latitude\":$(awk "BEGIN{print $plat+0.0003}"),\"longitude\":$plon,\"accuracy\":10}"
 expect "near check-in" 201 "$(call POST check_ins "$near" "resolution=ignore-duplicates,return=minimal")"
+fn() { # body -> prints HTTP status, body to /tmp/out
+  curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/functions/v1/attest" \
+    -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$1"
+}
+expect "App Attest hands out a challenge" 200 "$(fn '{"action":"challenge"}')"
+expect "App Attest refuses an unknown key" 404 "$(fn "{\"action\":\"submit\",\"table\":\"ratings\",\"keyId\":\"nope\",\"assertion\":\"\",\"body\":\"{}\"}")"
+fn '{"action":"challenge"}' >/dev/null; challenge=$(jq .challenge /tmp/out)
+expect "App Attest refuses a fake attestation" 403 "$(fn "{\"action\":\"register\",\"keyId\":\"k\",\"attestation\":\"AAAA\",\"challenge\":$challenge}")"

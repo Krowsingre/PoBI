@@ -7,6 +7,7 @@ struct ProfileScreen: View {
     @State private var confirmReset = false
     @State private var playerID: String?
     @State private var isReviewer = false
+    @State private var attest: ServerClient.AttestStatus = .notChecked
 
     var body: some View {
         NavigationStack {
@@ -55,6 +56,7 @@ struct ProfileScreen: View {
                 }
                 Section {
                     ServerStatusRow()
+                    AttestRow(status: attest)
                     if let playerID {
                         LabeledContent("Player ID") {
                             Text(playerID.prefix(8) + "…").font(.footnote.monospaced())
@@ -103,9 +105,35 @@ struct ProfileScreen: View {
                 guard ServerClient.shared.isConfigured, case .synced = store.syncState else { return }
                 playerID = try? await ServerClient.shared.playerID()
                 isReviewer = (try? await ServerClient.shared.isReviewer()) ?? false
+                attest = await ServerClient.shared.attestStatus
             }
             .confirmationDialog("Delete your ratings, check-ins and team choice on this phone? Your allergy list is kept.", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Reset", role: .destructive) { store.reset() }
+            }
+        }
+    }
+}
+
+/// Whether this iPhone has proved it's running the real app (App Attest).
+private struct AttestRow: View {
+    let status: ServerClient.AttestStatus
+
+    var body: some View {
+        switch status {
+        case .notChecked:
+            LabeledContent("Device check", value: "After your next upload")
+        case .unsupported:
+            LabeledContent("Device check", value: "Not available on this device")
+        case .verified:
+            LabeledContent("Device check") {
+                Label("Verified", systemImage: "checkmark.shield").foregroundStyle(.green)
+            }
+        case .failed(let reason):
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent("Device check") {
+                    Label("Not verified", systemImage: "exclamationmark.shield").foregroundStyle(.orange)
+                }
+                Text(reason).font(.footnote).foregroundStyle(.secondary)
             }
         }
     }
