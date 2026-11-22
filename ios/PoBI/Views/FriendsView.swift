@@ -279,7 +279,8 @@ struct PlaceRatingsSection: View {
         } footer: {
             Text("Score runs from −3 (all three-star Break It) to +3 (all three-star Plate It). Pending ratings aren't included.")
         }
-        .task(id: store.ratings.count) {
+        // Reload after each finished sync too, so a new rating (or one that starts counting) shows up.
+        .task(id: "\(store.ratings.count) \(store.syncState)") {
             guard ServerClient.shared.isConfigured else { return }
             do {
                 ratings = try await ServerClient.shared.placeRatings(place.id)
