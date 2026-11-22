@@ -17,6 +17,11 @@ struct HistoryScreen: View {
                                             Text(rating.date, format: .dateTime.month().day())
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
+                                            if rating.isPending {
+                                                Label("Pending", systemImage: "hourglass")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.orange)
+                                            }
                                         }
                                         Spacer()
                                         VerdictBadge(verdict: rating.verdict, stars: rating.stars, compact: true)

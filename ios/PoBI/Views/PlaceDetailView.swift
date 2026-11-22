@@ -50,6 +50,11 @@ struct PlaceDetailView: View {
                         Text(rating.date, format: .dateTime.month().day().year())
                             .foregroundStyle(.secondary)
                     }
+                    if let pending = rating.pendingText() {
+                        Label(pending, systemImage: "hourglass")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                     if let photo = store.dishPhoto(for: rating) {
                         Image(uiImage: photo)
                             .resizable()
