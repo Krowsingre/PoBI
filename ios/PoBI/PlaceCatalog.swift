@@ -11,6 +11,7 @@ struct PlaceCatalog: Sendable {
     private let byID: [String: Int]
     private let cells: [Cell: [Int]]
     private let searchKeys: [String]
+    private let byPhone: [String: [Int]]
 
     /// Grid cells are 0.01° tall and wide (about 1.1 km by 0.85 km in New Jersey).
     private static let cellSize = 0.01
@@ -43,7 +44,12 @@ struct PlaceCatalog: Sendable {
         }
         self.byID = byID
         self.cells = cells
-        searchKeys = places.map { "\($0.name) \($0.category) \($0.town)".folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        searchKeys = places.map { "\($0.name) \($0.category) \($0.town) \($0.address)".folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        var byPhone: [String: [Int]] = [:]
+        for (index, place) in places.enumerated() where !place.phone.isEmpty {
+            byPhone[place.phone, default: []].append(index)
+        }
+        self.byPhone = byPhone
     }
 
     /// Reads the bundled tab-separated file: id, name, category, town, latitude, longitude.
@@ -56,7 +62,7 @@ struct PlaceCatalog: Sendable {
         places.reserveCapacity(50_000)
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard fields.count == 6,
+            guard fields.count >= 6,
                   let latitude = Double(fields[4]),
                   let longitude = Double(fields[5]) else { continue }
             places.append(Place(
@@ -65,7 +71,10 @@ struct PlaceCatalog: Sendable {
                 category: String(fields[2]),
                 town: String(fields[3]),
                 latitude: latitude,
-                longitude: longitude
+                longitude: longitude,
+                address: fields.count > 6 ? String(fields[6]) : "",
+                phone: fields.count > 7 ? String(fields[7]) : "",
+                brand: fields.count > 8 ? String(fields[8]) : ""
             ))
         }
         return PlaceCatalog(places: places)
@@ -123,7 +132,22 @@ struct PlaceCatalog: Sendable {
         return closest(found, to: coordinate, limit: limit)
     }
 
-    /// Places whose name, food or town contains the query, closest first.
+    /// Places listed with this 10-digit phone number.
+    func places(withPhone phone: String) -> [Place] {
+        (byPhone[phone] ?? []).map { places[$0] }
+    }
+
+    /// Other places with the same name or brand, such as other branches of a chain.
+    func branches(of place: Place) -> [Place] {
+        let key = ReceiptMatcher.normalize(place.brand.isEmpty ? place.name : place.brand)
+        guard key.count >= 3 else { return [] }
+        return places.filter { other in
+            other.id != place.id
+                && (ReceiptMatcher.normalize(other.name) == key || ReceiptMatcher.normalize(other.brand) == key)
+        }
+    }
+
+    /// Places whose name, food, town or street contains the query, closest first.
     func search(_ query: String, near coordinate: CLLocationCoordinate2D, limit: Int) -> [Place] {
         let needle = query.trimmingCharacters(in: .whitespaces)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)

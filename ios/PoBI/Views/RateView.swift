@@ -18,7 +18,9 @@ struct RateView: View {
 
     @State private var shooting: Shot?
     @State private var receiptCheck: ReceiptReader.Result?
+    @State private var receiptMatch: ReceiptMatcher.Result?
     @State private var checkingReceipt = false
+    @State private var checkingPhoto = false
     /// The food or storefront photo, taken at the place and kept as a draft for 7 days (D17).
     @State private var dishImage: UIImage?
     /// The place doesn't allow food photos, so a photo of the outside or sign stands in (D16).
@@ -28,11 +30,13 @@ struct RateView: View {
     @State private var error: String?
 
     private var receiptOK: Bool {
-        if case .valid = receiptCheck { return true }
-        return false
+        guard case .valid = receiptCheck, case .matches = receiptMatch else { return false }
+        return true
     }
 
-    private var canSubmit: Bool { receiptOK && dishImage != nil && store.draft(for: place) != nil && !checkingReceipt }
+    private var canSubmit: Bool {
+        receiptOK && dishImage != nil && store.draft(for: place) != nil && !checkingReceipt && !checkingPhoto
+    }
 
     private var presence: CheckInStatus { store.presence(at: place, from: location.location) }
 
@@ -57,7 +61,7 @@ struct RateView: View {
                 } header: {
                     Text("Receipt")
                 } footer: {
-                    Text("The receipt must be from the last 7 days, with the date in the photo. It's read on your phone and never saved.")
+                    Text("The receipt must be from this place and the last 7 days, with the name and date in the photo. It's read on your phone and never saved.")
                 }
 
                 Section {
@@ -74,7 +78,7 @@ struct RateView: View {
                         .foregroundStyle(.green)
                         // The saved photo is only replaced once a new one is taken at the place.
                         Button("Retake photo") { shooting = .dish }
-                            .disabled(!CameraPicker.isAvailable || presence != .allowed)
+                            .disabled(!CameraPicker.isAvailable || presence != .allowed || checkingPhoto)
                     } else {
                         Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
                         Button {
@@ -86,6 +90,12 @@ struct RateView: View {
                             )
                         }
                         .disabled(!CameraPicker.isAvailable || presence != .allowed)
+                        if checkingPhoto {
+                            HStack {
+                                ProgressView()
+                                Text("Checking the photo…").foregroundStyle(.secondary)
+                            }
+                        }
                         if let hint = photoHint {
                             Text(hint).font(.footnote).foregroundStyle(.secondary)
                         }
@@ -157,9 +167,10 @@ struct RateView: View {
         if checkingReceipt {
             HStack {
                 ProgressView()
-                Text("Reading the date…").foregroundStyle(.secondary)
+                Text("Reading the receipt…").foregroundStyle(.secondary)
             }
         } else if let receiptCheck {
+            matchStatus
             switch receiptCheck {
             case .valid(let date):
                 Label("Dated \(date.formatted(.dateTime.month().day().year()))", systemImage: "checkmark.circle.fill")
@@ -177,6 +188,32 @@ struct RateView: View {
         }
     }
 
+    @ViewBuilder
+    private var matchStatus: some View {
+        switch receiptMatch {
+        case .matches(let confirmed):
+            Label(
+                confirmed ? "From this \(place.name)" : "Says \(place.name). Your photo at the place shows which branch.",
+                systemImage: "checkmark.circle.fill"
+            )
+            .foregroundStyle(.green)
+        case .otherBranch(let other):
+            Label(
+                "This receipt is from the \(other.name) at \(other.address.isEmpty ? other.town : other.address + ", " + other.town), not this one.",
+                systemImage: "xmark.circle.fill"
+            )
+            .foregroundStyle(.red)
+        case .nameNotFound:
+            Label(
+                "Couldn't find \(place.name) on this receipt. Retake it with the business name in view.",
+                systemImage: "xmark.circle.fill"
+            )
+            .foregroundStyle(.red)
+        case nil:
+            EmptyView()
+        }
+    }
+
     /// Why the food or storefront photo can't be taken right now, if it can't.
     private var photoHint: String? {
         switch presence {
@@ -191,22 +228,36 @@ struct RateView: View {
 
     private func saveDish(_ image: UIImage) {
         let photo = ImageResizer.downscale(image)
-        do {
-            try store.savePhotoDraft(photo, for: place, storefront: noPhotosAllowed, from: location.location)
-            dishImage = photo
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
+        let storefront = noPhotosAllowed
+        checkingPhoto = true
+        error = nil
+        Task {
+            let ok = await PhotoChecker.looksRight(photo, for: storefront ? .storefront : .food)
+            checkingPhoto = false
+            guard ok else {
+                error = storefront
+                    ? "That doesn't look like the outside of a place. Photograph the building or its sign."
+                    : "That doesn't look like food or a drink. Take a photo of what you ordered."
+                return
+            }
+            do {
+                try store.savePhotoDraft(photo, for: place, storefront: storefront, from: location.location)
+                dishImage = photo
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
     }
 
     private func checkReceipt(_ image: UIImage) {
         receiptCheck = nil
+        receiptMatch = nil
         checkingReceipt = true
         error = nil
         Task {
-            let result = await ReceiptReader.check(image)
-            receiptCheck = result
+            let scan = await ReceiptReader.read(image)
+            receiptMatch = ReceiptMatcher.check(lines: scan.lines, place: place, catalog: store.catalog)
+            receiptCheck = scan.date
             checkingReceipt = false
         }
     }
