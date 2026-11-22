@@ -5,6 +5,8 @@ struct ProfileScreen: View {
     @EnvironmentObject private var allergies: AllergyStore
     @EnvironmentObject private var location: LocationManager
     @State private var confirmReset = false
+    @State private var playerID: String?
+    @State private var isReviewer = false
 
     var body: some View {
         NavigationStack {
@@ -40,8 +42,27 @@ struct ProfileScreen: View {
                     LabeledContent("Break It", value: "\(store.ratings.filter { $0.verdict == .breakIt }.count)")
                     LabeledContent("Check-ins", value: "\(store.checkIns.count)")
                 }
+                if isReviewer {
+                    Section {
+                        NavigationLink {
+                            ReviewView()
+                        } label: {
+                            Label("Review receipts", systemImage: "checkmark.seal")
+                        }
+                    } footer: {
+                        Text("You're a reviewer. Approve or reject ratings waiting on a receipt check.")
+                    }
+                }
                 Section {
                     ServerStatusRow()
+                    if let playerID {
+                        LabeledContent("Player ID") {
+                            Text(playerID.prefix(8) + "…").font(.footnote.monospaced())
+                        }
+                        .contextMenu {
+                            Button("Copy player ID") { UIPasteboard.general.string = playerID }
+                        }
+                    }
                 } header: {
                     Text("Game server")
                 } footer: {
@@ -78,6 +99,11 @@ struct ProfileScreen: View {
                 }
             }
             .navigationTitle("Profile")
+            .task(id: store.syncState) {
+                guard ServerClient.shared.isConfigured, case .synced = store.syncState else { return }
+                playerID = try? await ServerClient.shared.playerID()
+                isReviewer = (try? await ServerClient.shared.isReviewer()) ?? false
+            }
             .confirmationDialog("Delete your ratings, check-ins and team choice on this phone? Your allergy list is kept.", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Reset", role: .destructive) { store.reset() }
             }

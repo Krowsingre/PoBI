@@ -106,7 +106,8 @@ jobs:
   smoke:
     name: Try the live server like the app does
     needs: [deploy, places]
-    if: always() && needs.deploy.result == 'success' && needs.places.result != 'failure'
+    # Only after migrations are applied (main), since it checks the new schema on the live server.
+    if: always() && github.event_name != 'pull_request' && needs.deploy.result == 'success' && needs.places.result != 'failure'
     runs-on: ubuntu-latest
     env:
       RAW_URL: ${{ secrets.SUPABASE_URL }}

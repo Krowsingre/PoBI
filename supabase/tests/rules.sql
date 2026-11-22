@@ -98,6 +98,45 @@ exception when insufficient_privilege then
   insert into expect values ('players cannot set owners', true);
 end $$;
 
+-- Look-alike receipts (D17): player 2 rates real-place with a receipt printed 4 minutes after player 1's.
+reset role;
+insert into players (id, team) values ('22222222-2222-2222-2222-222222222222', 'team3');
+insert into places values ('p5', 40.6, -74.6, '882a10000ffffff');
+update ratings set receipt_printed_at = '2026-11-20 12:00-05', receipt_number = '1041' where place_id = 'real-place';
+set role authenticated;
+set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, receipt_printed_at, receipt_number)
+  values ('33333333-3333-3333-3333-333333333333', 'real-place', 0, 0, 'plateIt', 3, '2026-11-20 12:04-05', '1043');
+insert into expect select 'a look-alike receipt waits for review',
+  (select pending = '{lookAlike}' and counted_at is null from ratings where id = '33333333-3333-3333-3333-333333333333');
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, receipt_printed_at, receipt_number, pending)
+  values (gen_random_uuid(), 'p5', 40, -74, 'plateIt', 1, '2026-11-20 18:00-05', '77', '{lookAlike}');
+insert into expect select 'players cannot set the look-alike flag themselves',
+  (select pending = '{}' from ratings where place_id = 'p5');
+
+do $$ begin
+  perform review_queue();
+  insert into expect values ('only reviewers see the queue', false);
+exception when insufficient_privilege then
+  insert into expect values ('only reviewers see the queue', true);
+end $$;
+update ratings set receipt_photo = true where id = '33333333-3333-3333-3333-333333333333';
+insert into expect select 'a player can mark their receipt photo uploaded',
+  (select receipt_photo from ratings where id = '33333333-3333-3333-3333-333333333333');
+
+reset role;
+insert into reviewers values ('11111111-1111-1111-1111-111111111111');
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into expect select 'the reviewer sees the flagged rating and why',
+  (select look_alike_reasons = '{printed minutes apart}' and receipt_path like '2222%' from review_queue()
+    where id = '33333333-3333-3333-3333-333333333333');
+insert into expect select 'a missing photo is not in the queue during its 30 days',
+  (select count(*) = 0 from review_queue() where pending = '{noFoodPhoto}');
+select review_rating('33333333-3333-3333-3333-333333333333', true, 'same family, separate orders');
+insert into expect select 'approving makes it count',
+  (select count(*) = 0 from review_queue() where id = '33333333-3333-3333-3333-333333333333');
+
 reset role;
 select replace_owners('[{"area":"A","team":"team2","boundary":[[1,2]]}]',
                       '[{"place_id":"real-place","team":"team2","area":"A"}]', '{"ratings":1,"check_ins":0}');

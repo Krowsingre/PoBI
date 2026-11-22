@@ -162,7 +162,8 @@ final class GameStore: ObservableObject {
     /// Either makes the rating pending, and the receipt photo is kept for review.
     func rate(
         _ place: Place, verdict: Verdict, stars: Int,
-        receiptPhoto: UIImage? = nil, typedReceipt: TypedReceipt? = nil, withoutPhoto: Bool = false
+        receiptPhoto: UIImage? = nil, typedReceipt: TypedReceipt? = nil, withoutPhoto: Bool = false,
+        receiptPrintedAt: Date? = nil, receiptNumber: String? = nil
     ) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
         var reasons: [PendingReason] = []
@@ -177,19 +178,19 @@ final class GameStore: ObservableObject {
             photoData = data
             storefront = draft.storefront
         }
-        // A pending rating keeps its receipt photo so it can be reviewed.
-        var receiptData: Data?
-        if !reasons.isEmpty {
-            guard let receiptPhoto,
-                  let data = ImageResizer.downscale(receiptPhoto, maxSide: 1600).jpegData(compressionQuality: 0.7)
-            else { throw GameError.missingReceipt }
-            receiptData = data
+        // The receipt photo stays on the phone until the server has the rating. It's uploaded
+        // only if the rating needs a review (pending here, or flagged by the server), then deleted.
+        let receiptData = receiptPhoto.flatMap {
+            ImageResizer.downscale($0, maxSide: 1600).jpegData(compressionQuality: 0.7)
         }
+        if !reasons.isEmpty && receiptData == nil { throw GameError.missingReceipt }
         let rating = Rating(
             id: UUID(), placeID: place.id, verdict: verdict, stars: min(max(stars, 1), 3), date: .now,
             storefrontPhoto: storefront ? true : nil,
             pending: reasons.isEmpty ? nil : reasons,
-            typedReceipt: typedReceipt
+            typedReceipt: typedReceipt,
+            receiptPrintedAt: typedReceipt == nil ? receiptPrintedAt : nil,
+            receiptNumber: typedReceipt == nil ? receiptNumber : nil
         )
         if let photoData {
             try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
@@ -321,7 +322,9 @@ final class GameStore: ObservableObject {
                     storefront_photo: rating.storefrontPhoto ?? false,
                     pending: (rating.pending ?? []).map(\.rawValue),
                     typed_business: rating.typedReceipt?.business,
-                    typed_date: rating.typedReceipt.map { $0.date.formatted(Self.dayFormat) }
+                    typed_date: rating.typedReceipt.map { $0.date.formatted(Self.dayFormat) },
+                    receipt_printed_at: rating.receiptPrintedAt,
+                    receipt_number: rating.receiptNumber
                 ))
                 guard generation == accountGeneration else { return }
                 synced.insert(rating.id)
@@ -350,6 +353,7 @@ final class GameStore: ObservableObject {
                 synced.insert(checkIn.id)
                 save()
             }
+            try await syncReviews(generation: generation)
             syncState = .synced(.now)
             await refreshOwners(force: true)
         } catch ServerClient.ServerError.accountReset {
@@ -359,6 +363,33 @@ final class GameStore: ObservableObject {
             save()
             syncState = .failed(error.localizedDescription)
         }
+    }
+
+    /// Brings pending ratings up to date with the server (a review, a look-alike flag, a
+    /// revisit), uploads receipt photos the server needs for a review, and deletes the rest.
+    private func syncReviews(generation: Int) async throws {
+        let server = ServerClient.shared
+        let fm = FileManager.default
+        let watched = ratings.filter {
+            synced.contains($0.id) && ($0.isPending || fm.fileExists(atPath: Self.receiptURL(for: $0).path(percentEncoded: false)))
+        }
+        let statuses = try await server.status(of: watched.map(\.id))
+        guard generation == accountGeneration else { return }
+        for status in statuses {
+            guard let index = ratings.firstIndex(where: { $0.id == status.id }) else { continue }
+            let reasons = status.pending.compactMap(PendingReason.init(rawValue:))
+            ratings[index].pending = reasons.isEmpty ? nil : reasons
+            ratings[index].rejected = status.rejected ? true : nil
+            let receipt = Self.receiptURL(for: ratings[index])
+            if !reasons.isEmpty && !status.rejected,
+               let data = try? Data(contentsOf: receipt) {
+                try await server.uploadReceipt(data, for: status.id)
+                guard generation == accountGeneration else { return }
+            }
+            // Sent for review, or not needed: either way the phone's copy can go.
+            try? fm.removeItem(at: receipt)
+        }
+        save()
     }
 
     /// Fetches team ownership for the map. Without `force`, at most once a minute.

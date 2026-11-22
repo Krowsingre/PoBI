@@ -98,8 +98,13 @@ struct Rating: Identifiable, Codable, Hashable {
     var pending: [PendingReason]? = nil
     /// What the player typed when the app couldn't read the receipt (D18).
     var typedReceipt: TypedReceipt? = nil
+    /// Printed time and order number read off the receipt, for the server's look-alike check (D17).
+    var receiptPrintedAt: Date? = nil
+    var receiptNumber: String? = nil
+    /// A reviewer turned this rating down. It never counts.
+    var rejected: Bool? = nil
 
-    var isPending: Bool { !(pending ?? []).isEmpty }
+    var isPending: Bool { !(pending ?? []).isEmpty || rejected == true }
 
     /// How long a check-in can clear a missing food photo (D19).
     static let revisitDays = 30
@@ -113,9 +118,15 @@ struct Rating: Identifiable, Codable, Hashable {
 
     /// One line on what the rating is waiting for, or nil when it counts.
     func pendingText(now: Date = .now) -> String? {
+        if rejected == true {
+            return "Turned down in review. This rating doesn't count for your team."
+        }
         let reasons = pending ?? []
         guard !reasons.isEmpty else { return nil }
         var parts: [String] = []
+        if reasons.contains(.lookAlike) {
+            parts.append("the receipt looks like part of another player's order, so it needs a review")
+        }
         if reasons.contains(.typedReceipt) {
             parts.append("the receipt photo needs a review")
         }
@@ -137,6 +148,8 @@ enum PendingReason: String, Codable, Hashable {
     case typedReceipt
     /// The player left without taking the food or storefront photo (D19).
     case noFoodPhoto
+    /// The server found another player's receipt from what looks like the same order (D17).
+    case lookAlike
 }
 
 struct TypedReceipt: Codable, Hashable {

@@ -21,6 +21,7 @@ struct RateView: View {
     @State private var shooting: Shot?
     @State private var receiptImage: UIImage?
     @State private var receiptCheck: ReceiptReader.Result?
+    @State private var receiptScan: ReceiptReader.Scan?
     @State private var receiptMatch: ReceiptMatcher.Result?
     @State private var checkingReceipt = false
     @State private var checkingPhoto = false
@@ -309,6 +310,7 @@ struct RateView: View {
     private func checkReceipt(_ image: UIImage) {
         receiptImage = image
         receiptCheck = nil
+        receiptScan = nil
         receiptMatch = nil
         checkingReceipt = true
         error = nil
@@ -316,6 +318,7 @@ struct RateView: View {
             let scan = await ReceiptReader.read(image)
             receiptMatch = ReceiptMatcher.check(lines: scan.lines, place: place, catalog: store.catalog)
             receiptCheck = scan.date
+            receiptScan = scan
             checkingReceipt = false
         }
     }
@@ -330,7 +333,9 @@ struct RateView: View {
                 place, verdict: verdict, stars: stars,
                 receiptPhoto: receiptImage,
                 typedReceipt: receiptOK ? nil : typedReceipt,
-                withoutPhoto: skippingPhoto
+                withoutPhoto: skippingPhoto,
+                receiptPrintedAt: receiptScan?.printedAt,
+                receiptNumber: receiptScan?.number
             )
             dismiss()
         } catch {
