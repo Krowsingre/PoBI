@@ -1,0 +1,83 @@
+name: Game server
+
+on:
+  pull_request:
+    paths: ["supabase/**", ".github/workflows/supabase.yml"]
+  push:
+    branches: [main]
+    paths: ["supabase/**", ".github/workflows/supabase.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test migrations on a local Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply migrations and run the checks
+        run: |
+          psql -v ON_ERROR_STOP=1 -q -f supabase/tests/auth_stub.sql
+          for f in supabase/migrations/*.sql; do psql -v ON_ERROR_STOP=1 -q -f "$f"; done
+          psql -v ON_ERROR_STOP=1 -q -f supabase/tests/rules.sql
+
+  deploy:
+    name: Apply to Supabase
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      RAW_URL: ${{ secrets.SUPABASE_URL }}
+      RAW_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RAW_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Link the project
+        run: |
+          url=$(printf '%s' "$RAW_URL" | tr -d '[:space:]')
+          # The project ref is the 20-letter id in https://<ref>.supabase.co, wherever it sits in the value.
+          ref=$(printf '%s' "$url" | grep -oE '[a-z]{20}' | head -n 1 || true)
+          if [ -z "$ref" ]; then
+            echo "::error::SUPABASE_URL should look like https://<20-letter project id>.supabase.co (value has ${#url} characters, no 20-letter id found)"
+            exit 1
+          fi
+          echo "::add-mask::$ref"
+          echo "PROJECT_REF=$ref" >> "$GITHUB_ENV"
+          echo "SUPABASE_ACCESS_TOKEN=$(printf '%s' "$RAW_TOKEN" | tr -d '[:space:]')" >> "$GITHUB_ENV"
+          echo "SUPABASE_DB_PASSWORD=$(printf '%s' "$RAW_DB_PASSWORD" | tr -d '\r\n')" >> "$GITHUB_ENV"
+      - name: Preview (pull requests)
+        if: github.event_name == 'pull_request'
+        run: |
+          supabase link --project-ref "$PROJECT_REF"
+          supabase db push --remote --dry-run
+      - name: Apply migrations
+        if: github.event_name != 'pull_request'
+        run: |
+          supabase link --project-ref "$PROJECT_REF"
+          supabase db push --remote
+      - name: Turn on guest sign-in
+        # Players start as anonymous (guest) accounts, so the app needs no sign-up screen yet.
+        if: github.event_name != 'pull_request'
+        run: |
+          curl -sS --fail-with-body -X PATCH \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"external_anon_users_enabled": true}' > /dev/null
+          echo "Guest sign-in is on."

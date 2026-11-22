@@ -1,0 +1,2 @@
+# Minimal Supabase CLI config. The hosted project is linked in CI from the SUPABASE_URL secret.
+project_id = "pobi"
