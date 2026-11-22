@@ -103,8 +103,16 @@ reset role;
 insert into players (id, team) values ('22222222-2222-2222-2222-222222222222', 'team3');
 insert into places values ('p5', 40.6, -74.6, '882a10000ffffff');
 update ratings set receipt_printed_at = '2026-11-20 12:00-05', receipt_number = '1041' where place_id = 'real-place';
+insert into places values ('p6', 40.7, -74.7, '882a10000ffffff');
 set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, receipt_number, receipt_date)
+  values (gen_random_uuid(), 'p6', 0, 0, 'plateIt', 2, '500', '2026-10-01');
 set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, receipt_number, receipt_date)
+  values (gen_random_uuid(), 'p6', 0, 0, 'plateIt', 2, '501', '2026-11-20');
+insert into expect select 'close order numbers on different days are not flagged',
+  (select pending = '{}' from ratings where place_id = 'p6' and player_id = auth.uid());
 insert into ratings (id, place_id, latitude, longitude, verdict, stars, receipt_printed_at, receipt_number)
   values ('33333333-3333-3333-3333-333333333333', 'real-place', 0, 0, 'plateIt', 3, '2026-11-20 12:04-05', '1043');
 insert into expect select 'a look-alike receipt waits for review',

@@ -335,7 +335,8 @@ struct RateView: View {
                 typedReceipt: receiptOK ? nil : typedReceipt,
                 withoutPhoto: skippingPhoto,
                 receiptPrintedAt: receiptScan?.printedAt,
-                receiptNumber: receiptScan?.number
+                receiptNumber: receiptScan?.number,
+                receiptDate: { if case .valid(let day) = receiptScan?.date { return day } else { return nil } }()
             )
             dismiss()
         } catch {

@@ -145,6 +145,7 @@ actor ServerClient {
         let typed_date: String?
         let receipt_printed_at: Date?
         let receipt_number: String?
+        let receipt_date: String?
     }
 
     struct RatingStatus: Decodable {
@@ -238,11 +239,14 @@ actor ServerClient {
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
-        request.setValue("true", forHTTPHeaderField: "x-upsert")
         request.httpBody = jpeg
         let (data, response) = try await URLSession.shared.data(for: request)
         guard started == generation else { throw ServerError.accountReset }
-        try Self.check(response, data)
+        // Already there from an earlier try that didn't finish: carry on and mark it uploaded.
+        let alreadyThere = (response as? HTTPURLResponse).map {
+            $0.statusCode == 409 || ($0.statusCode == 400 && String(decoding: data, as: UTF8.self).contains("Duplicate"))
+        } ?? false
+        if !alreadyThere { try Self.check(response, data) }
         try await rest("ratings?id=eq.\(rating.uuidString.lowercased())", method: "PATCH",
                        body: ["receipt_photo": true], prefer: "return=minimal")
     }

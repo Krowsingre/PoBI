@@ -163,7 +163,7 @@ final class GameStore: ObservableObject {
     func rate(
         _ place: Place, verdict: Verdict, stars: Int,
         receiptPhoto: UIImage? = nil, typedReceipt: TypedReceipt? = nil, withoutPhoto: Bool = false,
-        receiptPrintedAt: Date? = nil, receiptNumber: String? = nil
+        receiptPrintedAt: Date? = nil, receiptNumber: String? = nil, receiptDate: Date? = nil
     ) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
         var reasons: [PendingReason] = []
@@ -190,7 +190,8 @@ final class GameStore: ObservableObject {
             pending: reasons.isEmpty ? nil : reasons,
             typedReceipt: typedReceipt,
             receiptPrintedAt: typedReceipt == nil ? receiptPrintedAt : nil,
-            receiptNumber: typedReceipt == nil ? receiptNumber : nil
+            receiptNumber: typedReceipt == nil ? receiptNumber : nil,
+            receiptDate: typedReceipt == nil ? receiptDate : nil
         )
         if let photoData {
             try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
@@ -324,7 +325,8 @@ final class GameStore: ObservableObject {
                     typed_business: rating.typedReceipt?.business,
                     typed_date: rating.typedReceipt.map { $0.date.formatted(Self.dayFormat) },
                     receipt_printed_at: rating.receiptPrintedAt,
-                    receipt_number: rating.receiptNumber
+                    receipt_number: rating.receiptNumber,
+                    receipt_date: rating.receiptDate.map { $0.formatted(Self.dayFormat) }
                 ))
                 guard generation == accountGeneration else { return }
                 synced.insert(rating.id)

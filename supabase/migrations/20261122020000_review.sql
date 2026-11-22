@@ -5,6 +5,8 @@
 alter table public.ratings
   add column receipt_printed_at timestamptz,
   add column receipt_number text,
+  -- The date printed on the receipt, when the app could read it.
+  add column receipt_date date,
   -- Set when the phone uploaded the receipt photo for review.
   add column receipt_photo boolean not null default false,
   add column reviewed_at timestamptz,
@@ -26,13 +28,15 @@ create table public.look_alikes (
 );
 
 create function public.find_look_alikes(
-  rating uuid, player uuid, place text, printed timestamptz, number text
+  rating uuid, player uuid, place text, printed timestamptz, number text, day date
 ) returns integer
 language plpgsql security definer set search_path = '' as $$
 declare
   found integer := 0;
   n bigint := case when number ~ '^\d{1,15}$' then number::bigint end;
 begin
+  -- Order numbers often restart daily, so they only match receipts from the same day.
+  day := coalesce((printed at time zone 'America/New_York')::date, day);
   insert into public.look_alikes (rating_id, matches, reason)
   select rating, r.id,
          case when printed is not null and r.receipt_printed_at is not null
@@ -45,15 +49,14 @@ begin
         and abs(extract(epoch from r.receipt_printed_at - printed)) <= 600)
        or (n is not null and r.receipt_number ~ '^\d{1,15}$'
            and abs(r.receipt_number::bigint - n) <= 3
-           and (printed is null or r.receipt_printed_at is null
-                or (r.receipt_printed_at at time zone 'America/New_York')::date
-                   = (printed at time zone 'America/New_York')::date))
+           and day is not null
+           and coalesce((r.receipt_printed_at at time zone 'America/New_York')::date, r.receipt_date) = day)
      )
   on conflict do nothing;
   get diagnostics found = row_count;
   return found;
 end $$;
-revoke execute on function public.find_look_alikes(uuid, uuid, text, timestamptz, text) from public, anon, authenticated;
+revoke execute on function public.find_look_alikes(uuid, uuid, text, timestamptz, text, date) from public, anon, authenticated;
 
 -- Players can't mark their own rating reviewed or photo-deleted.
 create or replace function public.stamp_rating() returns trigger
@@ -88,7 +91,8 @@ end $$;
 create function public.flag_look_alike() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
-  if public.find_look_alikes(new.id, new.player_id, new.place_id, new.receipt_printed_at, new.receipt_number) > 0 then
+  if public.find_look_alikes(new.id, new.player_id, new.place_id, new.receipt_printed_at,
+                             new.receipt_number, new.receipt_date) > 0 then
     update public.ratings
        set pending = array(select distinct unnest(pending || array['lookAlike'])), counted_at = null
      where id = new.id;

@@ -57,9 +57,11 @@ await send("POST", "rpc/replace_owners", {
 });
 
 // Receipt photos are kept 30 days after review, so a player can contest it, then deleted (D20).
+// A rating settled without a review (a revisit cleared its missing photo) counts from counted_at.
 const cutoff = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
 const expired = await getAll<{ id: string; player_id: string }>(
-  `ratings?select=id,player_id&receipt_photo=is.true&photo_deleted_at=is.null&reviewed_at=lt.${cutoff}`,
+  `ratings?select=id,player_id&receipt_photo=is.true&photo_deleted_at=is.null` +
+  `&or=(reviewed_at.lt.${cutoff},and(reviewed_at.is.null,counted_at.lt.${cutoff}))`,
 );
 for (const r of expired) {
   const res = await fetch(`${base}/storage/v1/object/receipts/${r.player_id}/${r.id}.jpg`, { method: "DELETE", headers });

@@ -101,6 +101,8 @@ struct Rating: Identifiable, Codable, Hashable {
     /// Printed time and order number read off the receipt, for the server's look-alike check (D17).
     var receiptPrintedAt: Date? = nil
     var receiptNumber: String? = nil
+    /// The date printed on the receipt, when it could be read.
+    var receiptDate: Date? = nil
     /// A reviewer turned this rating down. It never counts.
     var rejected: Bool? = nil
 
