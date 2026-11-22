@@ -50,12 +50,11 @@ const areaRows = [...result.areas].map(([area, team]) => ({
 }));
 const placeRows = [...result.places].map(([place_id, v]) => ({ place_id, team: v.team, area: v.area }));
 
-// Replace the owner tables with the new result.
-await send("DELETE", "area_owners?area=not.is.null");
-if (areaRows.length) await send("POST", "area_owners", areaRows);
-await send("DELETE", "place_owners?place_id=not.is.null");
-if (placeRows.length) await send("POST", "place_owners", placeRows);
-await send("POST", "game_runs", { ratings: ratings.length, check_ins: checkIns.length, skipped: result.skipped });
+// Swap in the new result in one transaction (see replace_owners in the migrations).
+await send("POST", "rpc/replace_owners", {
+  areas: areaRows, places: placeRows,
+  run: { ratings: ratings.length, check_ins: checkIns.length, skipped: result.skipped },
+});
 
 console.log(`Replayed ${ratings.length} ratings and ${checkIns.length} check-ins from ${players.length} players.`);
 console.log(`Owned: ${areaRows.length} areas, ${placeRows.length} places. Skipped: ${JSON.stringify(result.skipped)}`);

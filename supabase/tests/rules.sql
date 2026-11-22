@@ -86,11 +86,24 @@ end $$;
 insert into expect select 'a missing photo cleared by a check-in counts from then',
   (select counted_at > rated_at - interval '1 second' from ratings where place_id = 'p1');
 do $$ begin
+  perform replace_owners('[]', '[]', '{"ratings":0,"check_ins":0}');
+  insert into expect values ('players cannot run the owner swap', false);
+exception when insufficient_privilege then
+  insert into expect values ('players cannot run the owner swap', true);
+end $$;
+do $$ begin
   insert into area_owners values ('x', 'team1', '[]');
   insert into expect values ('players cannot set owners', false);
 exception when insufficient_privilege then
   insert into expect values ('players cannot set owners', true);
 end $$;
+
+reset role;
+select replace_owners('[{"area":"A","team":"team2","boundary":[[1,2]]}]',
+                      '[{"place_id":"real-place","team":"team2","area":"A"}]', '{"ratings":1,"check_ins":0}');
+select replace_owners('[{"area":"B","team":"team3","boundary":[[1,2]]}]', '[]', '{"ratings":1,"check_ins":0}');
+insert into expect select 'owner swap replaces the whole result',
+  (select count(*) = 1 and bool_and(area = 'B') from area_owners) and (select count(*) = 0 from place_owners);
 
 select name, ok from expect;
 do $$ begin

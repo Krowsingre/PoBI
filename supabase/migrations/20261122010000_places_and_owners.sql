@@ -85,3 +85,20 @@ create policy "read place owners" on public.place_owners for select to authentic
 revoke insert, update, delete on public.places, public.area_owners, public.place_owners, public.game_runs
   from authenticated, anon;
 revoke all on public.places, public.area_owners, public.place_owners, public.game_runs from anon;
+
+-- The runner swaps in a whole new ownership result at once, so the map never sees
+-- empty tables or a mix of two runs, and a failed run keeps the last good result.
+create function public.replace_owners(areas jsonb, places jsonb, run jsonb) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  delete from public.area_owners where true;
+  insert into public.area_owners (area, team, boundary)
+    select a->>'area', a->>'team', a->'boundary' from jsonb_array_elements(areas) a;
+  delete from public.place_owners where true;
+  insert into public.place_owners (place_id, team, area)
+    select p->>'place_id', p->>'team', p->>'area' from jsonb_array_elements(places) p;
+  insert into public.game_runs (ratings, check_ins, skipped)
+    values ((run->>'ratings')::int, (run->>'check_ins')::int, coalesce(run->'skipped', '{}'));
+end $$;
+
+revoke execute on function public.replace_owners(jsonb, jsonb, jsonb) from public, anon, authenticated;
