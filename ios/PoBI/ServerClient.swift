@@ -143,6 +143,112 @@ actor ServerClient {
         let pending: [String]
         let typed_business: String?
         let typed_date: String?
+        let receipt_printed_at: Date?
+        let receipt_number: String?
+        let receipt_date: String?
+    }
+
+    struct RatingStatus: Decodable {
+        let id: UUID
+        let pending: [String]
+        let rejected: Bool
+    }
+
+    /// The server's view of these ratings: still pending (and why), or rejected.
+    func status(of ids: [UUID]) async throws -> [RatingStatus] {
+        guard !ids.isEmpty else { return [] }
+        let list = ids.map { $0.uuidString.lowercased() }.joined(separator: ",")
+        return try await get("ratings?select=id,pending,rejected&id=in.(\(list))")
+    }
+
+    // MARK: Review (D18): for players listed as reviewers on the server
+
+    struct ReviewItem: Decodable, Identifiable, Equatable {
+        let id: UUID
+        let place_id: String
+        let verdict: String
+        let stars: Int
+        let rated_at: String
+        let pending: [String]
+        let typed_business: String?
+        let typed_date: String?
+        let receipt_printed_at: String?
+        let receipt_number: String?
+        let receipt_path: String?
+        let look_alike_reasons: [String]
+    }
+
+    /// This phone's player ID on the server (shown on Profile, used to add a reviewer).
+    func playerID() async throws -> String {
+        try await validSession().userID
+    }
+
+    func isReviewer() async throws -> Bool {
+        try await rpc("is_reviewer", body: [String: String]())
+    }
+
+    func reviewQueue() async throws -> [ReviewItem] {
+        try await rpc("review_queue", body: [String: String]())
+    }
+
+    func review(_ rating: UUID, approve: Bool, note: String?) async throws {
+        struct Body: Encodable { let rating: UUID; let approve: Bool; let note: String? }
+        _ = try await rpcData("review_rating", body: Body(rating: rating, approve: approve, note: note))
+    }
+
+    /// Downloads a receipt photo from the private bucket (reviewers only).
+    func receiptImage(at path: String) async throws -> Data {
+        guard let config else { throw ServerError.notConfigured }
+        let session = try await validSession()
+        var request = URLRequest(url: URL(string: "storage/v1/object/authenticated/receipts/\(path)", relativeTo: config.url)!)
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.check(response, data)
+        return data
+    }
+
+    private func rpc<Body: Encodable, T: Decodable>(_ name: String, body: Body) async throws -> T {
+        try await JSONDecoder().decode(T.self, from: rpcData(name, body: body))
+    }
+
+    private func rpcData<Body: Encodable>(_ name: String, body: Body) async throws -> Data {
+        guard let config else { throw ServerError.notConfigured }
+        let started = generation
+        let session = try await validSession()
+        var request = URLRequest(url: URL(string: "rest/v1/rpc/\(name)", relativeTo: config.url)!)
+        request.httpMethod = "POST"
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard started == generation else { throw ServerError.accountReset }
+        try Self.check(response, data)
+        return data
+    }
+
+    /// Uploads a receipt photo for review into the player's own private folder.
+    func uploadReceipt(_ jpeg: Data, for rating: UUID) async throws {
+        guard let config else { throw ServerError.notConfigured }
+        let started = generation
+        let session = try await validSession()
+        let path = "\(session.userID)/\(rating.uuidString.lowercased()).jpg"
+        var request = URLRequest(url: URL(string: "storage/v1/object/receipts/\(path)", relativeTo: config.url)!)
+        request.httpMethod = "POST"
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.httpBody = jpeg
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard started == generation else { throw ServerError.accountReset }
+        // Already there from an earlier try that didn't finish: carry on and mark it uploaded.
+        let alreadyThere = (response as? HTTPURLResponse).map {
+            $0.statusCode == 409 || ($0.statusCode == 400 && String(decoding: data, as: UTF8.self).contains("Duplicate"))
+        } ?? false
+        if !alreadyThere { try Self.check(response, data) }
+        try await rest("ratings?id=eq.\(rating.uuidString.lowercased())", method: "PATCH",
+                       body: ["receipt_photo": true], prefer: "return=minimal")
     }
 
     struct CheckInUpload: Encodable {
@@ -209,7 +315,9 @@ actor ServerClient {
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(prefer, forHTTPHeaderField: "Prefer")
-        request.httpBody = try JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        request.httpBody = try encoder.encode(body)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard started == generation else { throw ServerError.accountReset }
         if conflictIsOK, (response as? HTTPURLResponse)?.statusCode == 409 { return }

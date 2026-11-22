@@ -3,7 +3,8 @@ import UIKit
 import Vision
 
 /// Reads the date printed on a receipt photo, on the phone, with Apple's text recognition.
-/// The receipt must be dated within the last 7 days (D11). The photo itself is never stored.
+/// The receipt must be dated within the last 7 days (D11). Also reads the printed time and the
+/// order number, which the server uses to spot receipts from one order split between players (D17).
 enum ReceiptReader {
     enum Result: Equatable {
         /// A date within the allowed window was found.
@@ -23,12 +24,50 @@ enum ReceiptReader {
     struct Scan: Equatable {
         let lines: [String]
         let date: Result
+        /// The receipt's date and printed time together, when both could be read.
+        var printedAt: Date? = nil
+        /// The order, check or ticket number, when one could be read.
+        var number: String? = nil
     }
 
     static func read(_ image: UIImage, now: Date = .now) async -> Scan {
         let lines = await recognizeText(in: image)
         let found = lines.flatMap { Self.dates(in: $0, now: now) }
-        return Scan(lines: lines, date: evaluate(found, now: now))
+        let date = evaluate(found, now: now)
+        var printedAt: Date?
+        if case .valid(let day) = date, let time = lines.lazy.compactMap(Self.time(in:)).first {
+            printedAt = GameStore.calendar.date(bySettingHour: time.hour, minute: time.minute, second: 0, of: day)
+        }
+        return Scan(lines: lines, date: date, printedAt: printedAt, number: lines.lazy.compactMap(Self.orderNumber(in:)).first)
+    }
+
+    /// A printed time such as 12:04 PM, 7:31p or 19:05:22.
+    static func time(in text: String) -> (hour: Int, minute: Int)? {
+        let lower = text.lowercased()
+        guard let regex = try? NSRegularExpression(pattern: #"(?<![\d:])(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm|a|p)?(?![\d:])"#),
+              let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
+              let hourRange = Range(match.range(at: 1), in: lower),
+              let minuteRange = Range(match.range(at: 2), in: lower),
+              var hour = Int(lower[hourRange]), let minute = Int(lower[minuteRange]),
+              minute < 60 else { return nil }
+        if let suffixRange = Range(match.range(at: 3), in: lower) {
+            guard (1...12).contains(hour) else { return nil }
+            let pm = lower[suffixRange].hasPrefix("p")
+            if pm && hour != 12 { hour += 12 }
+            if !pm && hour == 12 { hour = 0 }
+        }
+        guard hour < 24 else { return nil }
+        return (hour, minute)
+    }
+
+    /// An order, check or ticket number such as "Order #1043", "Chk 512" or "Ticket: 88".
+    static func orderNumber(in text: String) -> String? {
+        let lower = text.lowercased()
+        let pattern = #"\b(?:order|ord|check|chk|ticket|tkt|trans(?:action)?|trn|receipt|rcpt|invoice|inv)\b\.?\s*(?:#|no\.?|num(?:ber)?)?\s*:?\s*#?\s*(\d{2,10})\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
+              let range = Range(match.range(at: 1), in: lower) else { return nil }
+        return String(lower[range])
     }
 
     static func evaluate(_ dates: [Date], now: Date) -> Result {

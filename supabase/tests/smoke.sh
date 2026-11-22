@@ -7,6 +7,10 @@ base=$1 anon=$2 service=$3
 IFS=$'\t' read -r place_id _ _ _ plat plon _ < <(head -n 1 ios/PoBI/Resources/nj_places.tsv)
 uid=""
 cleanup() {
+  if [ -n "$uid" ] && [ -n "${rating:-}" ]; then
+    curl -sS -o /dev/null -X DELETE "$base/storage/v1/object/receipts/$uid/$rating.jpg" \
+      -H "apikey: $service" -H "Authorization: Bearer $service" || true
+  fi
   if [ -n "$uid" ]; then
     curl -sS -o /dev/null -w "Deleted test player: HTTP %{http_code}\n" -X DELETE \
       "$base/auth/v1/admin/users/$uid" -H "apikey: $service" -H "Authorization: Bearer $service"
@@ -38,6 +42,18 @@ rating=$(cat /proc/sys/kernel/random/uuid)
 body="{\"id\":\"$rating\",\"place_id\":\"$place_id\",\"latitude\":$plat,\"longitude\":$plon,\"verdict\":\"plateIt\",\"stars\":2,\"storefront_photo\":false,\"pending\":[],\"typed_business\":null,\"typed_date\":null}"
 expect "rate" 201 "$(call POST ratings "$body" "resolution=ignore-duplicates,return=minimal")"
 expect "same rating again is harmless" 201 "$(call POST ratings "$body" "resolution=ignore-duplicates,return=minimal")"
+printf '\xff\xd8\xff\xd9' > /tmp/receipt.jpg
+code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/storage/v1/object/receipts/$uid/$rating.jpg" \
+  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: image/jpeg" -H "x-upsert: true" \
+  --data-binary @/tmp/receipt.jpg)
+expect "upload a receipt photo to your own folder" 200 "$code"
+code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/storage/v1/object/receipts/someone-else/$rating.jpg" \
+  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: image/jpeg" --data-binary @/tmp/receipt.jpg)
+[ "$code" != 200 ] && echo "ok: can't upload into another player's folder ($code)" || { echo "FAIL: uploaded into another folder"; exit 1; }
+expect "mark receipt uploaded" 204 "$(call PATCH "ratings?id=eq.$rating" '{"receipt_photo":true}' return=minimal)"
+code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/rest/v1/rpc/review_queue" \
+  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{}')
+[ "$code" != 200 ] && echo "ok: a non-reviewer can't open the review queue ($code)" || { echo "FAIL: queue open to everyone"; exit 1; }
 far="{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"place_id\":\"$place_id\",\"latitude\":$(awk "BEGIN{print $plat+0.08}"),\"longitude\":$plon,\"accuracy\":10}"
 code=$(call POST check_ins "$far" "return=minimal")
 expect "far check-in refused" 400 "$code"

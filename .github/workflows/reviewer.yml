@@ -1,0 +1,32 @@
+name: Add a reviewer
+
+# Lets a player review pending receipts in the app. Run it from the Actions tab with the
+# player ID shown on the app's Profile screen (long-press it to copy).
+on:
+  workflow_dispatch:
+    inputs:
+      player_id:
+        description: "Player ID from the app's Profile screen"
+        required: true
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add the player to reviewers
+        env:
+          RAW_URL: ${{ secrets.SUPABASE_URL }}
+          RAW_SERVICE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PLAYER_ID: ${{ inputs.player_id }}
+        run: |
+          id=$(printf '%s' "$PLAYER_ID" | tr -d '[:space:]' | tr 'A-Z' 'a-z')
+          if ! printf '%s' "$id" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "::error::That doesn't look like a player ID."; exit 1
+          fi
+          ref=$(printf '%s' "$RAW_URL" | tr -d '[:space:]' | grep -oE '[a-z]{20}' | head -n 1)
+          key=$(printf '%s' "$RAW_SERVICE" | tr -d '[:space:]')
+          code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "https://$ref.supabase.co/rest/v1/reviewers" \
+            -H "apikey: $key" -H "Authorization: Bearer $key" -H "Content-Type: application/json" \
+            -H "Prefer: resolution=ignore-duplicates,return=minimal" -d "{\"player_id\":\"$id\"}")
+          if [ "$code" != 201 ]; then echo "::error::Couldn't add the reviewer (HTTP $code)"; cat /tmp/out; exit 1; fi
+          echo "Added. Reopen the app's Profile screen to see Review receipts."

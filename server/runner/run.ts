@@ -56,6 +56,22 @@ await send("POST", "rpc/replace_owners", {
   run: { ratings: ratings.length, check_ins: checkIns.length, skipped: result.skipped },
 });
 
+// Receipt photos are kept 30 days after review, so a player can contest it, then deleted (D20).
+// A rating settled without a review (a revisit cleared its missing photo) counts from counted_at.
+const cutoff = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+const expired = await getAll<{ id: string; player_id: string }>(
+  `ratings?select=id,player_id&receipt_photo=is.true&photo_deleted_at=is.null` +
+  `&or=(reviewed_at.lt.${cutoff},and(reviewed_at.is.null,counted_at.lt.${cutoff}))`,
+);
+for (const r of expired) {
+  const res = await fetch(`${base}/storage/v1/object/receipts/${r.player_id}/${r.id}.jpg`, { method: "DELETE", headers });
+  if (!res.ok && res.status !== 404 && res.status !== 400) {
+    throw new Error(`Deleting a receipt photo: HTTP ${res.status} ${await res.text()}`);
+  }
+  await send("PATCH", `ratings?id=eq.${r.id}`, { photo_deleted_at: new Date().toISOString() });
+}
+if (expired.length) console.log(`Deleted ${expired.length} receipt photos reviewed over 30 days ago.`);
+
 console.log(`Replayed ${ratings.length} ratings and ${checkIns.length} check-ins from ${players.length} players.`);
 console.log(`Owned: ${areaRows.length} areas, ${placeRows.length} places. Skipped: ${JSON.stringify(result.skipped)}`);
 
