@@ -7,3 +7,4 @@ build/
 .env
 ios/PoBI.xcodeproj/
 ios/PoBI/Info.plist
+ios/PoBI/Resources/server.json

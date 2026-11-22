@@ -53,6 +53,8 @@ jobs:
       RAW_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
       RAW_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
       ASC_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+      RAW_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      RAW_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Clean up secret values
@@ -71,6 +73,14 @@ jobs:
         run: xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
+      - name: Write game server address
+        # The address and public (anon) key are meant to ship inside the app; the database's
+        # row-level security is what protects the data. Without this file the app stays offline.
+        run: |
+          ref=$(printf '%s' "$RAW_SUPABASE_URL" | tr -d '[:space:]' | grep -oE '[a-z]{20}' | head -n 1 || true)
+          key=$(printf '%s' "$RAW_SUPABASE_ANON_KEY" | tr -d '[:space:]')
+          if [ -z "$ref" ] || [ -z "$key" ]; then echo "::error::SUPABASE_URL or SUPABASE_ANON_KEY is missing"; exit 1; fi
+          jq -n --arg url "https://$ref.supabase.co" --arg key "$key" '{url: $url, anonKey: $key}' > PoBI/Resources/server.json
       - name: Generate project
         run: xcodegen generate
       - name: Write App Store Connect key

@@ -40,7 +40,10 @@ struct RootView: View {
         }
         .onAppear { location.start() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { location.start() }
+            if phase == .active {
+                location.start()
+                Task { await store.sync() }
+            }
         }
     }
 }
