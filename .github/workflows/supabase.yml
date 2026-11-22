@@ -65,12 +65,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           supabase link --project-ref "$PROJECT_REF"
-          supabase db push --dry-run -p "$SUPABASE_DB_PASSWORD"
+          supabase db push --remote --dry-run
       - name: Apply migrations
         if: github.event_name != 'pull_request'
         run: |
           supabase link --project-ref "$PROJECT_REF"
-          supabase db push -p "$SUPABASE_DB_PASSWORD"
+          supabase db push --remote
       - name: Turn on guest sign-in
         # Players start as anonymous (guest) accounts, so the app needs no sign-up screen yet.
         if: github.event_name != 'pull_request'
