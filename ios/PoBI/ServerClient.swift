@@ -207,8 +207,8 @@ actor ServerClient {
         return data
     }
 
+    private func rpc<Body: Encodable, T: Decodable>(_ name: String, body: Body) async throws -> T {
         try await JSONDecoder().decode(T.self, from: rpcData(name, body: body))
-        try JSONDecoder().decode(T.self, from: rpcData(name, body: body))
     }
 
     private func rpcData<Body: Encodable>(_ name: String, body: Body) async throws -> Data {
