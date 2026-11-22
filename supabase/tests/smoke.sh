@@ -12,8 +12,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-auth=$(curl -sS --fail-with-body -X POST "$base/auth/v1/signup" \
+code=$(curl -sS -o /tmp/auth -w "%{http_code}" -X POST "$base/auth/v1/signup" \
   -H "apikey: $anon" -H "Content-Type: application/json" -d '{}')
+if [ "$code" != 200 ]; then echo "FAIL: guest sign-in (HTTP $code)"; jq -c '{code, error_code, msg}' /tmp/auth || cat /tmp/auth; exit 1; fi
+auth=$(cat /tmp/auth)
 token=$(jq -r .access_token <<<"$auth")
 uid=$(jq -r .user.id <<<"$auth")
 echo "Guest sign-in works."
