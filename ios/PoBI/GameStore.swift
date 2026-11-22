@@ -28,6 +28,11 @@ final class GameStore: ObservableObject {
     /// Check-ins the server refused, with its reason (for example, too far from the place).
     @Published private(set) var refused: [UUID: String] = [:]
     private var syncing = false
+
+    /// Areas and places owned by a team, from the game server. Empty until fetched.
+    @Published private(set) var areaOwners: [ServerClient.AreaOwner] = []
+    @Published private(set) var placeOwners: [String: Team] = [:]
+    private var ownersFetchedAt: Date?
     private var syncAgain = false
     /// Goes up on "Reset test data", so a sync that started before it drops its results.
     private var accountGeneration = 0
@@ -248,6 +253,9 @@ final class GameStore: ObservableObject {
         drafts = [:]
         synced = []
         refused = [:]
+        areaOwners = []
+        placeOwners = [:]
+        ownersFetchedAt = nil
         syncedPlayerID = nil
         accountGeneration += 1
         syncState = ServerClient.shared.isConfigured ? .idle : .notConfigured
@@ -343,6 +351,7 @@ final class GameStore: ObservableObject {
                 save()
             }
             syncState = .synced(.now)
+            await refreshOwners(force: true)
         } catch ServerClient.ServerError.accountReset {
             return
         } catch {
@@ -350,6 +359,19 @@ final class GameStore: ObservableObject {
             save()
             syncState = .failed(error.localizedDescription)
         }
+    }
+
+    /// Fetches team ownership for the map. Without `force`, at most once a minute.
+    func refreshOwners(force: Bool = false) async {
+        guard ServerClient.shared.isConfigured, team != nil else { return }
+        if !force, let ownersFetchedAt, Date.now.timeIntervalSince(ownersFetchedAt) < 60 { return }
+        ownersFetchedAt = .now
+        guard let owners = try? await ServerClient.shared.owners() else { return }
+        areaOwners = owners.areas.filter { Team(rawValue: $0.team) != nil }
+        placeOwners = Dictionary(
+            owners.places.compactMap { row in Team(rawValue: row.team).map { (row.place_id, $0) } },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     // MARK: Photos

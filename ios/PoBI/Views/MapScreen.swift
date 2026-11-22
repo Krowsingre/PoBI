@@ -37,6 +37,12 @@ struct MapScreen: View {
     var body: some View {
         NavigationStack {
             Map(position: $position) {
+                // Team areas: hexagons of about 0.7 km², won with new ratings at month end.
+                ForEach(teamAreas) { area in
+                    MapPolygon(coordinates: area.corners)
+                        .foregroundStyle(area.team.color.opacity(0.22))
+                        .stroke(area.team.color, lineWidth: 1.5)
+                }
                 UserAnnotation()
                 if let test = location.testLocation {
                     Marker("Test location", systemImage: "location.viewfinder", coordinate: test.coordinate)
@@ -47,7 +53,7 @@ struct MapScreen: View {
                         Button {
                             selected = place
                         } label: {
-                            PlaceMarker(rating: store.rating(for: place))
+                            PlaceMarker(rating: store.rating(for: place), owner: store.placeOwners[place.id])
                         }
                         .buttonStyle(.plain)
                     }
@@ -69,7 +75,10 @@ struct MapScreen: View {
                 refresh()
             }
             .onChange(of: store.catalogLoaded) { refresh() }
-            .onAppear { centerOnUserIfNeeded() }
+            .onAppear {
+                centerOnUserIfNeeded()
+                Task { await store.refreshOwners() }
+            }
             .onChange(of: location.location) { centerOnUserIfNeeded() }
             .overlay(alignment: .top) {
                 if let hint {
@@ -89,6 +98,22 @@ struct MapScreen: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+        }
+    }
+
+    private struct TeamArea: Identifiable {
+        let id: String
+        let team: Team
+        let corners: [CLLocationCoordinate2D]
+    }
+
+    private var teamAreas: [TeamArea] {
+        store.areaOwners.compactMap { owner in
+            guard let team = Team(rawValue: owner.team) else { return nil }
+            let corners = owner.boundary.compactMap { corner in
+                corner.count == 2 ? CLLocationCoordinate2D(latitude: corner[0], longitude: corner[1]) : nil
+            }
+            return corners.count >= 3 ? TeamArea(id: owner.area, team: team, corners: corners) : nil
         }
     }
 
@@ -122,6 +147,8 @@ struct MapScreen: View {
 
 struct PlaceMarker: View {
     let rating: Rating?
+    /// The team that holds this place through check-ins, shown as the ring's colour.
+    var owner: Team? = nil
 
     var body: some View {
         Image(systemName: "fork.knife")
@@ -129,7 +156,7 @@ struct PlaceMarker: View {
             .foregroundStyle(.white)
             .frame(width: 28, height: 28)
             .background(Circle().fill(rating.map { $0.verdict.color } ?? Color.gray))
-            .overlay(Circle().stroke(.white, lineWidth: 2))
+            .overlay(Circle().stroke(owner?.color ?? .white, lineWidth: owner == nil ? 2 : 4))
             .shadow(radius: 2)
     }
 }
