@@ -3,6 +3,8 @@
 # Usage: smoke.sh <project url> <anon key> <service role key>
 set -euo pipefail
 base=$1 anon=$2 service=$3
+# A real place from the catalogue, so the server's own position check applies.
+IFS=$'\t' read -r place_id _ _ _ plat plon _ < <(head -n 1 ios/PoBI/Resources/nj_places.tsv)
 uid=""
 cleanup() {
   if [ -n "$uid" ]; then
@@ -33,12 +35,12 @@ expect() { # name wanted got
 expect "create player" 201 "$(call POST players "{\"id\":\"$uid\"}" "resolution=ignore-duplicates,return=minimal")"
 expect "pick team" 204 "$(call PATCH "players?id=eq.$uid&team=is.null" '{"team":"team1"}' return=minimal)"
 rating=$(cat /proc/sys/kernel/random/uuid)
-body="{\"id\":\"$rating\",\"place_id\":\"smoke-test\",\"latitude\":40.22,\"longitude\":-74.55,\"verdict\":\"plateIt\",\"stars\":2,\"storefront_photo\":false,\"pending\":[],\"typed_business\":null,\"typed_date\":null}"
+body="{\"id\":\"$rating\",\"place_id\":\"$place_id\",\"latitude\":$plat,\"longitude\":$plon,\"verdict\":\"plateIt\",\"stars\":2,\"storefront_photo\":false,\"pending\":[],\"typed_business\":null,\"typed_date\":null}"
 expect "rate" 201 "$(call POST ratings "$body" "resolution=ignore-duplicates,return=minimal")"
 expect "same rating again is harmless" 201 "$(call POST ratings "$body" "resolution=ignore-duplicates,return=minimal")"
-far="{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"place_id\":\"smoke-test\",\"latitude\":40.30,\"longitude\":-74.55,\"accuracy\":10}"
+far="{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"place_id\":\"$place_id\",\"latitude\":$(awk "BEGIN{print $plat+0.08}"),\"longitude\":$plon,\"accuracy\":10}"
 code=$(call POST check_ins "$far" "return=minimal")
 expect "far check-in refused" 400 "$code"
 grep -q P0001 /tmp/out && echo "ok: refusal carries the rule's message: $(jq -r .message /tmp/out)"
-near="{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"place_id\":\"smoke-test\",\"latitude\":40.2203,\"longitude\":-74.55,\"accuracy\":10}"
+near="{\"id\":\"$(cat /proc/sys/kernel/random/uuid)\",\"place_id\":\"$place_id\",\"latitude\":$(awk "BEGIN{print $plat+0.0003}"),\"longitude\":$plon,\"accuracy\":10}"
 expect "near check-in" 201 "$(call POST check_ins "$near" "resolution=ignore-duplicates,return=minimal")"

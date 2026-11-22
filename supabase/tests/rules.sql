@@ -66,6 +66,32 @@ exception when insufficient_privilege then
   insert into expect values ('players cannot rate as someone else', true);
 end $$;
 
+reset role;
+insert into places values ('real-place', 40.5, -74.5, '882a10000ffffff');
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars)
+  values (gen_random_uuid(), 'real-place', 0, 0, 'plateIt', 3);
+insert into expect select 'place position comes from the catalogue',
+  (select latitude = 40.5 and longitude = -74.5 from ratings where place_id = 'real-place');
+insert into expect select 'a rating with nothing pending counts now',
+  (select counted_at is not null from ratings where place_id = 'real-place');
+do $$ begin
+  insert into ratings (id, place_id, latitude, longitude, verdict, stars)
+    values (gen_random_uuid(), 'made-up', 40, -74, 'plateIt', 1);
+  insert into expect values ('unknown places are refused', false);
+exception when raise_exception then
+  insert into expect values ('unknown places are refused', true);
+end $$;
+insert into expect select 'a missing photo cleared by a check-in counts from then',
+  (select counted_at > rated_at - interval '1 second' from ratings where place_id = 'p1');
+do $$ begin
+  insert into area_owners values ('x', 'team1', '[]');
+  insert into expect values ('players cannot set owners', false);
+exception when insufficient_privilege then
+  insert into expect values ('players cannot set owners', true);
+end $$;
+
 select name, ok from expect;
 do $$ begin
   if exists (select 1 from expect where not ok) then raise exception 'A rules check failed'; end if;

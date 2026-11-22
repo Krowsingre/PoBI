@@ -1,0 +1,44 @@
+name: Game runner
+
+# Replays ratings and check-ins through the rules engine and updates who owns which
+# places and areas. Runs every 15 minutes, which also covers month-end area changes.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  push:
+    branches: [main]
+    paths: ["server/runner/**", "engine/src/**", ".github/workflows/runner.yml"]
+  pull_request:
+    paths: ["server/runner/**", "engine/src/**", ".github/workflows/runner.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: game-runner
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Update owners
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server/runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - name: Test the replay
+        run: npm test
+      - name: Update owners on the live server
+        if: github.event_name != 'pull_request'
+        env:
+          RAW_URL: ${{ secrets.SUPABASE_URL }}
+          RAW_SERVICE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          ref=$(printf '%s' "$RAW_URL" | tr -d '[:space:]' | grep -oE '[a-z]{20}' | head -n 1)
+          export SUPABASE_URL="https://$ref.supabase.co"
+          export SUPABASE_SERVICE_ROLE_KEY=$(printf '%s' "$RAW_SERVICE" | tr -d '[:space:]')
+          npm run run

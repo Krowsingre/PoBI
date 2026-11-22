@@ -2,10 +2,10 @@ name: Game server
 
 on:
   pull_request:
-    paths: ["supabase/**", ".github/workflows/supabase.yml"]
+    paths: ["supabase/**", "server/**", "data/load_places.py", ".github/workflows/supabase.yml"]
   push:
     branches: [main]
-    paths: ["supabase/**", ".github/workflows/supabase.yml"]
+    paths: ["supabase/**", "server/**", "data/load_places.py", "ios/PoBI/Resources/nj_places.tsv", ".github/workflows/supabase.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -84,9 +84,29 @@ jobs:
           if [ "$on" != "true" ]; then echo "::error::Guest sign-in is still off (got $on)"; exit 1; fi
           echo "Guest sign-in is on."
 
+  places:
+    name: Load the place catalogue
+    needs: deploy
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      RAW_URL: ${{ secrets.SUPABASE_URL }}
+      RAW_SERVICE: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install h3==4.5.1
+      - name: Upload places with their areas
+        run: |
+          ref=$(printf '%s' "$RAW_URL" | tr -d '[:space:]' | grep -oE '[a-z]{20}' | head -n 1)
+          python data/load_places.py "https://$ref.supabase.co" "$(printf '%s' "$RAW_SERVICE" | tr -d '[:space:]')"
+
   smoke:
     name: Try the live server like the app does
-    needs: deploy
+    needs: [deploy, places]
+    if: always() && needs.deploy.result == 'success' && needs.places.result != 'failure'
     runs-on: ubuntu-latest
     env:
       RAW_URL: ${{ secrets.SUPABASE_URL }}
