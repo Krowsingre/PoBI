@@ -301,8 +301,10 @@ actor ServerClient {
                 if code == "unknown_key" || code == "attest_failed" {
                     // The server doesn't know this key or didn't accept its signature: make a new one next time.
                     forgetAttestKey(reply?["message"] as? String ?? "Not accepted")
+                } else if status >= 500 || code == "replayed" {
+                    // The signing step is down or tripped over itself: send it directly this time.
                 } else {
-                    if status == 409 && code != "replayed" { return }
+                    if status == 409 { return }
                     try Self.check(response, answer)
                     attestStatus = .verified
                     return
@@ -312,8 +314,12 @@ actor ServerClient {
                 if error.code == .invalidKey || error.code == .invalidInput {
                     forgetAttestKey(error.localizedDescription)
                 }
+            } catch is URLError {
+                // Couldn't reach the signing step: try the database directly below.
             }
         }
+        // Started before a reset: drop it rather than sending it to the new account.
+        guard started == generation else { throw ServerError.accountReset }
         try await rest(table, method: "POST", body: body,
                        prefer: "resolution=ignore-duplicates,return=minimal", conflictIsOK: true)
     }
