@@ -157,6 +157,20 @@ struct CheckIn: Identifiable, Codable, Hashable {
     let id: UUID
     let placeID: String
     let date: Date
+    /// Where the phone was, for the server's own 80 m check. Missing on check-ins from older builds.
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+    var accuracy: Double? = nil
+}
+
+/// How the phone's ratings and check-ins stand with the game server.
+enum SyncState: Equatable {
+    /// This build has no server address (local builds).
+    case notConfigured
+    case idle
+    case syncing
+    case synced(Date)
+    case failed(String)
 }
 
 enum CheckInStatus: Equatable {

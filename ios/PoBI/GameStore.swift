@@ -8,7 +8,10 @@ import UIKit
 @MainActor
 final class GameStore: ObservableObject {
     @Published var team: Team? {
-        didSet { save() }
+        didSet {
+            save()
+            Task { await sync() }
+        }
     }
     @Published private(set) var ratings: [Rating] = []
     @Published private(set) var checkIns: [CheckIn] = []
@@ -18,6 +21,18 @@ final class GameStore: ObservableObject {
     /// The bundled New Jersey catalogue. It loads in the background at launch.
     @Published private(set) var catalog: PlaceCatalog = .empty
     @Published private(set) var catalogLoaded = false
+
+    /// Ratings and check-ins the server has accepted (or refused for good), by ID.
+    @Published private(set) var synced: Set<UUID> = []
+    @Published private(set) var syncState: SyncState = ServerClient.shared.isConfigured ? .idle : .notConfigured
+    /// Check-ins the server refused, with its reason (for example, too far from the place).
+    @Published private(set) var refused: [UUID: String] = [:]
+    private var syncing = false
+    private var syncAgain = false
+    /// Goes up on "Reset test data", so a sync that started before it drops its results.
+    private var accountGeneration = 0
+    /// The server account that `synced` refers to.
+    private var syncedPlayerID: String?
 
     /// Used when the phone's location isn't known yet: central New Jersey.
     static let defaultCenter = CLLocationCoordinate2D(latitude: 40.22, longitude: -74.55)
@@ -36,6 +51,9 @@ final class GameStore: ObservableObject {
         var ratings: [Rating]
         var checkIns: [CheckIn]
         var drafts: [String: PhotoDraft]?
+        var synced: Set<UUID>?
+        var refused: [UUID: String]?
+        var syncedPlayerID: String?
     }
 
     init() {
@@ -45,12 +63,16 @@ final class GameStore: ObservableObject {
             ratings = saved.ratings
             checkIns = saved.checkIns
             drafts = saved.drafts ?? [:]
+            synced = saved.synced ?? []
+            refused = saved.refused ?? [:]
+            syncedPlayerID = saved.syncedPlayerID
         }
         dropExpiredDrafts()
         Task {
             let catalog = await Task.detached(priority: .userInitiated) { PlaceCatalog.loadBundled() }.value
             self.catalog = catalog
             self.catalogLoaded = true
+            await self.sync()
         }
     }
 
@@ -178,6 +200,7 @@ final class GameStore: ObservableObject {
         } else {
             save()
         }
+        Task { await sync() }
     }
 
     private func isExpired(_ draft: PhotoDraft, now: Date) -> Bool {
@@ -203,7 +226,11 @@ final class GameStore: ObservableObject {
         case .allowed: break
         }
         let now = Date.now
-        checkIns.append(CheckIn(id: UUID(), placeID: place.id, date: now))
+        checkIns.append(CheckIn(
+            id: UUID(), placeID: place.id, date: now,
+            latitude: here?.coordinate.latitude, longitude: here?.coordinate.longitude,
+            accuracy: here?.horizontalAccuracy
+        ))
         // Coming back within 30 days makes up for a missing food photo (D19).
         if let index = ratings.firstIndex(where: { $0.placeID == place.id }),
            var reasons = ratings[index].pending, reasons.contains(.noFoodPhoto),
@@ -212,16 +239,117 @@ final class GameStore: ObservableObject {
             ratings[index].pending = reasons.isEmpty ? nil : reasons
         }
         save()
+        Task { await sync() }
     }
 
     func reset() {
         ratings = []
         checkIns = []
         drafts = [:]
+        synced = []
+        refused = [:]
+        syncedPlayerID = nil
+        accountGeneration += 1
+        syncState = ServerClient.shared.isConfigured ? .idle : .notConfigured
+        // A fresh guest account, so the server's copy of the old ratings doesn't block re-rating.
+        Task { await ServerClient.shared.signOut() }
         try? FileManager.default.removeItem(at: Self.photosDirectory)
         try? FileManager.default.removeItem(at: Self.draftsDirectory)
         try? FileManager.default.removeItem(at: Self.receiptsDirectory)
         team = nil
+    }
+
+    // MARK: Game server
+
+    var unsyncedCount: Int {
+        ratings.filter { !synced.contains($0.id) }.count + checkIns.filter { !synced.contains($0.id) }.count
+    }
+
+    private static let dayFormat: Date.ISO8601FormatStyle = {
+        var style = Date.ISO8601FormatStyle(timeZone: calendar.timeZone)
+        style = style.year().month().day()
+        return style
+    }()
+
+    /// Sends the player's team, ratings and check-ins the server doesn't have yet.
+    /// Safe to call often: a call made during a sync makes that sync run once more.
+    func sync() async {
+        guard ServerClient.shared.isConfigured, team != nil, catalogLoaded else { return }
+        guard !syncing else {
+            syncAgain = true
+            return
+        }
+        syncing = true
+        syncState = .syncing
+        defer { syncing = false }
+        repeat {
+            syncAgain = false
+            await syncOnce()
+        } while syncAgain && syncState != .notConfigured
+    }
+
+    private func syncOnce() async {
+        let server = ServerClient.shared
+        let generation = accountGeneration
+        do {
+            let playerID = try await server.registerPlayer(team: team)
+            guard generation == accountGeneration else { return }
+            if playerID != syncedPlayerID {
+                // A different server account (first sync, or the old one was lost):
+                // everything has to go to this one.
+                synced = []
+                refused = [:]
+                syncedPlayerID = playerID
+                save()
+            }
+            // Ratings first: the server only accepts a check-in at a place you've rated.
+            // Re-read the list each time, so ratings added during the sync go too.
+            while let rating = ratings.first(where: { !synced.contains($0.id) && place(id: $0.placeID) != nil }),
+                  let place = place(id: rating.placeID) {
+                try await server.upload(ServerClient.RatingUpload(
+                    id: rating.id, place_id: place.id,
+                    latitude: place.latitude, longitude: place.longitude,
+                    verdict: rating.verdict.rawValue, stars: rating.stars,
+                    storefront_photo: rating.storefrontPhoto ?? false,
+                    pending: (rating.pending ?? []).map(\.rawValue),
+                    typed_business: rating.typedReceipt?.business,
+                    typed_date: rating.typedReceipt.map { $0.date.formatted(Self.dayFormat) }
+                ))
+                guard generation == accountGeneration else { return }
+                synced.insert(rating.id)
+                save()
+            }
+            let sentRatings = Set(ratings.filter { synced.contains($0.id) }.map(\.placeID))
+            for checkIn in checkIns where !synced.contains(checkIn.id) {
+                // Wait for the place's rating to reach the server first.
+                guard sentRatings.contains(checkIn.placeID) else { continue }
+                guard let latitude = checkIn.latitude, let longitude = checkIn.longitude,
+                      let accuracy = checkIn.accuracy else {
+                    // Made before this build recorded locations; the server can't check it.
+                    synced.insert(checkIn.id)
+                    continue
+                }
+                do {
+                    try await server.upload(ServerClient.CheckInUpload(
+                        id: checkIn.id, place_id: checkIn.placeID,
+                        latitude: latitude, longitude: longitude, accuracy: accuracy
+                    ))
+                } catch ServerClient.ServerError.refused(let reason) {
+                    guard generation == accountGeneration else { return }
+                    refused[checkIn.id] = reason
+                }
+                guard generation == accountGeneration else { return }
+                synced.insert(checkIn.id)
+                save()
+            }
+            syncState = .synced(.now)
+        } catch ServerClient.ServerError.accountReset {
+            return
+        } catch {
+            guard generation == accountGeneration else { return }
+            save()
+            syncState = .failed(error.localizedDescription)
+        }
     }
 
     // MARK: Photos
@@ -258,7 +386,8 @@ final class GameStore: ObservableObject {
     // MARK: Storage
 
     private func save() {
-        let saved = Saved(team: team, ratings: ratings, checkIns: checkIns, drafts: drafts)
+        let saved = Saved(team: team, ratings: ratings, checkIns: checkIns, drafts: drafts,
+                          synced: synced, refused: refused, syncedPlayerID: syncedPlayerID)
         if let data = try? JSONEncoder().encode(saved) {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
