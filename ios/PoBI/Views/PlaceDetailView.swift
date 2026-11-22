@@ -15,6 +15,9 @@ struct PlaceDetailView: View {
         List {
             Section {
                 LabeledContent("Category", value: place.category)
+                if !place.address.isEmpty {
+                    LabeledContent("Address", value: place.address)
+                }
                 LabeledContent("Town", value: place.town)
                 if let distance = location.distanceText(to: place) {
                     LabeledContent("Distance", value: distance)

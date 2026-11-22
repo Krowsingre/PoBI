@@ -32,6 +32,10 @@ struct Place: Identifiable, Codable, Hashable, Sendable {
     let town: String
     let latitude: Double
     let longitude: Double
+    /// Street address, phone (10 digits) and chain brand from Overture. Any may be empty.
+    var address: String = ""
+    var phone: String = ""
+    var brand: String = ""
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)

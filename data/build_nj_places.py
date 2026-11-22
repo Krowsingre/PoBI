@@ -8,7 +8,8 @@ bucket and writes ios/PoBI/Resources/nj_places.tsv.
     python3 data/build_nj_places.py 2026-11-18.0
 
 Output columns (tab separated, no header):
-    overture_id, name, category, town, latitude, longitude
+    overture_id, name, category, town, latitude, longitude, street_address, phone, brand
+    (the last three may be empty; phone is the last 10 digits)
 """
 import os
 import sys
@@ -57,7 +58,7 @@ def main() -> None:
     box = lambda k: ds.field("bbox", k)
     flt = (box("xmin") >= XMIN) & (box("xmax") <= XMAX) & (box("ymin") >= YMIN) & (box("ymax") <= YMAX)
     table = dataset.to_table(
-        columns=["id", "names", "taxonomy", "addresses", "confidence", "operating_status", "bbox"],
+        columns=["id", "names", "taxonomy", "addresses", "confidence", "operating_status", "bbox", "phones", "brand"],
         filter=flt,
     )
 
@@ -87,7 +88,11 @@ def main() -> None:
         else:
             category = humanize(taxonomy.get("primary") or "restaurant")
         town = clean(address.get("locality")).title()
-        rows.append((r["id"], name, category, town, f"{lat:.5f}", f"{lon:.5f}"))
+        street = clean(address.get("freeform"))
+        digits = "".join(ch for ch in ((r["phones"] or [""])[0] or "") if ch.isdigit())
+        phone = digits[-10:] if len(digits) >= 10 else ""
+        brand = clean(((r["brand"] or {}).get("names") or {}).get("primary"))
+        rows.append((r["id"], name, category, town, f"{lat:.5f}", f"{lon:.5f}", street, phone, brand))
 
     rows.sort(key=lambda row: row[0])
     OUT.parent.mkdir(parents=True, exist_ok=True)

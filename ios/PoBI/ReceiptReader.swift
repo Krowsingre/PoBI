@@ -19,10 +19,16 @@ enum ReceiptReader {
     /// How many days back a receipt may be dated, counting today as day 0.
     static let maxAgeDays = 7
 
-    static func check(_ image: UIImage, now: Date = .now) async -> Result {
+    /// What was read off a receipt: every line of text, and the date check.
+    struct Scan: Equatable {
+        let lines: [String]
+        let date: Result
+    }
+
+    static func read(_ image: UIImage, now: Date = .now) async -> Scan {
         let lines = await recognizeText(in: image)
         let found = lines.flatMap { Self.dates(in: $0, now: now) }
-        return evaluate(found, now: now)
+        return Scan(lines: lines, date: evaluate(found, now: now))
     }
 
     static func evaluate(_ dates: [Date], now: Date) -> Result {
@@ -44,7 +50,7 @@ enum ReceiptReader {
 
     // MARK: Text recognition
 
-    private static func recognizeText(in photo: UIImage) async -> [String] {
+    static func recognizeText(in photo: UIImage) async -> [String] {
         // Redrawing at a modest size also bakes in the camera's rotation.
         let image = ImageResizer.downscale(photo, maxSide: 2000)
         guard let cgImage = image.cgImage else { return [] }
