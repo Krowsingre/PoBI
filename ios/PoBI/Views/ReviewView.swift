@@ -65,6 +65,7 @@ struct ReviewDetailView: View {
     static func reasons(_ item: ServerClient.ReviewItem) -> String {
         var parts: [String] = []
         if item.pending.contains("typedReceipt") { parts.append("Typed in: the app couldn't read it") }
+        if item.pending.contains("digitalReceipt") { parts.append("Digital receipt shared into the app (PDF, email or screenshot)") }
         if item.pending.contains("lookAlike") {
             let why = item.look_alike_reasons.isEmpty ? "" : " (\(item.look_alike_reasons.joined(separator: ", ")))"
             parts.append("Looks like part of another player's order\(why)")

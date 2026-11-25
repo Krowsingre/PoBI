@@ -27,6 +27,8 @@ final class GameStore: ObservableObject {
     @Published private(set) var syncState: SyncState = ServerClient.shared.isConfigured ? .idle : .notConfigured
     /// Check-ins the server refused, with its reason (for example, too far from the place).
     @Published private(set) var refused: [UUID: String] = [:]
+    /// A receipt file shared into the app (PDF, email, screenshot), waiting to be used in a rating.
+    @Published private(set) var sharedReceipt: URL?
     private var syncing = false
 
     /// Areas and places owned by a team, from the game server. Empty until fetched.
@@ -163,11 +165,13 @@ final class GameStore: ObservableObject {
     func rate(
         _ place: Place, verdict: Verdict, stars: Int,
         receiptPhoto: UIImage? = nil, typedReceipt: TypedReceipt? = nil, withoutPhoto: Bool = false,
+        digitalReceipt: Bool = false,
         receiptPrintedAt: Date? = nil, receiptNumber: String? = nil, receiptDate: Date? = nil
     ) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
         var reasons: [PendingReason] = []
         if typedReceipt != nil { reasons.append(.typedReceipt) }
+        if digitalReceipt { reasons.append(.digitalReceipt) }
         var photoData: Data?
         var storefront = false
         if withoutPhoto {
@@ -181,7 +185,8 @@ final class GameStore: ObservableObject {
         // The receipt photo stays on the phone until the server has the rating. It's uploaded
         // only if the rating needs a review (pending here, or flagged by the server), then deleted.
         let receiptData = receiptPhoto.flatMap {
-            ImageResizer.downscale($0, maxSide: 1600).jpegData(compressionQuality: 0.7)
+            // A digital receipt can be several PDF pages tall, so it keeps more pixels to stay readable.
+            ImageResizer.downscale($0, maxSide: digitalReceipt ? 3200 : 1600).jpegData(compressionQuality: 0.7)
         }
         if !reasons.isEmpty && receiptData == nil { throw GameError.missingReceipt }
         let rating = Rating(
@@ -418,6 +423,27 @@ final class GameStore: ObservableObject {
     }
 
     /// Receipt photos kept only for pending ratings, until they're reviewed.
+    /// Keeps a copy of a file shared into the app, replacing any earlier one.
+    func receiveSharedReceipt(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let folder = URL.documentsDirectory.appending(path: "shared-receipt", directoryHint: .isDirectory)
+        try? FileManager.default.removeItem(at: folder)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appending(path: url.lastPathComponent.isEmpty ? "receipt" : url.lastPathComponent)
+        do {
+            try FileManager.default.copyItem(at: url, to: copy)
+            sharedReceipt = copy
+        } catch {
+            sharedReceipt = nil
+        }
+    }
+
+    func clearSharedReceipt() {
+        if let sharedReceipt { try? FileManager.default.removeItem(at: sharedReceipt.deletingLastPathComponent()) }
+        sharedReceipt = nil
+    }
+
     static var receiptsDirectory: URL {
         URL.documentsDirectory.appending(path: "receipts-for-review", directoryHint: .isDirectory)
     }

@@ -132,6 +132,9 @@ struct Rating: Identifiable, Codable, Hashable {
         if reasons.contains(.typedReceipt) {
             parts.append("the receipt photo needs a review")
         }
+        if reasons.contains(.digitalReceipt) {
+            parts.append("the digital receipt needs a review")
+        }
         if reasons.contains(.noFoodPhoto) {
             if now < revisitDeadline {
                 let day = revisitDeadline.addingTimeInterval(-1).formatted(.dateTime.month().day())
@@ -152,6 +155,8 @@ enum PendingReason: String, Codable, Hashable {
     case noFoodPhoto
     /// The server found another player's receipt from what looks like the same order (D17).
     case lookAlike
+    /// The receipt was shared into the app (PDF, email or screenshot), which is easier to fake than paper.
+    case digitalReceipt
 }
 
 struct TypedReceipt: Codable, Hashable {

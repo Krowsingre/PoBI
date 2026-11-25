@@ -28,6 +28,13 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSLocationWhenInUseUsageDescription: Plate or Break It uses your location to show nearby places and confirm you're at a restaurant when you rate or check in.
         NSCameraUsageDescription: Take a photo of your dish and your receipt.
+        # Lets a receipt PDF, saved email or screenshot be shared into the app (digital receipts).
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Receipt
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.adobe.pdf, public.image, public.email-message, com.apple.mail.email, public.html, public.plain-text]
+        LSSupportsOpeningDocumentsInPlace: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.krowsingre.pobi
