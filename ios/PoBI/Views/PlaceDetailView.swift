@@ -58,6 +58,11 @@ struct PlaceDetailView: View {
                         Text(rating.date, format: .dateTime.month().day().year())
                             .foregroundStyle(.secondary)
                     }
+                    if rating.delivery == true {
+                        Label("Delivery order: shows in ratings, doesn't count toward territory", systemImage: "bag")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     if let pending = rating.pendingText() {
                         Label(pending, systemImage: "hourglass")
                             .font(.footnote)

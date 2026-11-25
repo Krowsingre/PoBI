@@ -32,7 +32,8 @@ async function send(method: string, path: string, body?: unknown): Promise<void>
 const now = Date.now();
 const players = await getAll<PlayerRow>("players?select=id,team");
 const ratings = await getAll<RatingRow>(
-  "ratings?select=player_id,place_id,verdict,stars,counted_at&counted_at=not.is.null&rejected=is.false&order=counted_at",
+  // Delivery ratings show in a place's ratings but don't count toward territory.
+  "ratings?select=player_id,place_id,verdict,stars,counted_at&counted_at=not.is.null&rejected=is.false&delivery=is.false&order=counted_at",
 );
 const checkIns = await getAll<CheckInRow>("check_ins?select=player_id,place_id,checked_at&order=checked_at");
 
