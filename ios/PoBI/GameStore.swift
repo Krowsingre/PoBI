@@ -185,7 +185,8 @@ final class GameStore: ObservableObject {
         // The receipt photo stays on the phone until the server has the rating. It's uploaded
         // only if the rating needs a review (pending here, or flagged by the server), then deleted.
         let receiptData = receiptPhoto.flatMap {
-            ImageResizer.downscale($0, maxSide: 1600).jpegData(compressionQuality: 0.7)
+            // A digital receipt can be several PDF pages tall, so it keeps more pixels to stay readable.
+            ImageResizer.downscale($0, maxSide: digitalReceipt ? 3200 : 1600).jpegData(compressionQuality: 0.7)
         }
         if !reasons.isEmpty && receiptData == nil { throw GameError.missingReceipt }
         let rating = Rating(
