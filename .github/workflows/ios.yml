@@ -107,6 +107,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
             archive | tail -n 80
+      - name: Add the app's entitlements
+        # The archive above is unsigned, so it carries no entitlements. Signing it here (ad hoc)
+        # records Sign in with Apple, and the export below keeps it when it signs for real.
+        run: |
+          app="$RUNNER_TEMP/PoBI.xcarchive/Products/Applications/PoBI.app"
+          codesign --force --sign - --entitlements PoBI/PoBI.entitlements --generate-entitlement-der "$app"
+          codesign -d --entitlements - "$app" | grep -q applesignin || { echo "::error::entitlements missing"; exit 1; }
       - name: Upload to TestFlight
         run: |
           set -o pipefail

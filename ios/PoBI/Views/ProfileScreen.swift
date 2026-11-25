@@ -21,6 +21,7 @@ struct ProfileScreen: View {
                     }
                 }
                 if ServerClient.shared.isConfigured {
+                    AccountSection()
                     Section {
                         NavigationLink {
                             FriendsView()

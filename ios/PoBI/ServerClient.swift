@@ -4,7 +4,7 @@ import Foundation
 import Security
 
 /// Talks to the game server (Supabase) over its REST API. Players start as guest
-/// (anonymous) accounts, so there's no sign-up screen yet.
+/// (anonymous) accounts, and can link Sign in with Apple to keep their progress.
 ///
 /// The server address and public key come from `server.json`, which CI writes from
 /// the repository's secrets. Without it (local builds), the app stays offline.
@@ -19,6 +19,8 @@ actor ServerClient {
         var refreshToken: String
         var expiresAt: Date
         let userID: String
+        /// False once the account is signed in with Apple. Nil on sessions saved by older builds (guests).
+        var isAnonymous: Bool? = nil
     }
 
     enum ServerError: LocalizedError {
@@ -30,6 +32,8 @@ actor ServerClient {
         case accountReset
         /// The server requires a verified app (App Attest). The upload is kept and retried.
         case needsUpdate
+        /// The Apple sign-in ran out and couldn't be renewed. Nothing is sent until the player signs in again.
+        case signInAgain
 
         var errorDescription: String? {
             switch self {
@@ -38,6 +42,7 @@ actor ServerClient {
             case .refused(let message): return message
             case .accountReset: return "The account was reset."
             case .needsUpdate: return "Update Plate or Break It to keep sending your visits."
+            case .signInAgain: return "Sign in with Apple again on the Profile tab to keep sending your visits."
             }
         }
     }
@@ -69,32 +74,53 @@ actor ServerClient {
         let refresh_token: String
         let expires_in: Double
         let user: User
-        struct User: Decodable { let id: String }
+        struct User: Decodable {
+            let id: String
+            let is_anonymous: Bool?
+        }
+    }
+
+    /// Set when an Apple account's sign-in can't be renewed, so the app doesn't quietly
+    /// start a new guest account and leave the player's progress behind.
+    private static let lostSignInKey = "pobi.appleSignInLost"
+    private var appleSignInLost: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.lostSignInKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.lostSignInKey) }
     }
 
     /// Returns a valid session, signing in as a guest or refreshing the token when needed.
     private func validSession() async throws -> Session {
         guard config != nil else { throw ServerError.notConfigured }
         if let session, session.expiresAt.timeIntervalSinceNow > 60 { return session }
+        if appleSignInLost { throw ServerError.signInAgain }
         let started = generation
         if let session {
             do {
                 return try store(await auth(path: "token?grant_type=refresh_token",
                                             body: ["refresh_token": session.refreshToken]), started: started)
             } catch ServerError.http(let code, _) where (400..<500).contains(code) {
-                // The refresh token is no longer valid. A new guest account follows below;
+                guard started == generation else { throw ServerError.accountReset }
+                if session.isAnonymous == false {
+                    // An Apple account: wait for the player to sign in again rather than start over.
+                    self.session = nil
+                    Keychain.delete()
+                    appleSignInLost = true
+                    throw ServerError.signInAgain
+                }
+                // A guest whose refresh token is no longer valid. A new guest account follows below;
                 // GameStore notices the new player ID and re-sends everything to it.
             }
         }
-        return try store(await auth(path: "signup", body: [:]), started: started)
+        return try store(await auth(path: "signup", body: [String: String]()), started: started)
     }
 
-    private func auth(path: String, body: [String: String]) async throws -> AuthResponse {
+    private func auth<Body: Encodable>(path: String, body: Body, bearer: String? = nil) async throws -> AuthResponse {
         guard let config else { throw ServerError.notConfigured }
         var request = URLRequest(url: URL(string: "auth/v1/\(path)", relativeTo: config.url)!)
         request.httpMethod = "POST"
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONEncoder().encode(body)
         let (data, response) = try await URLSession.shared.data(for: request)
         try Self.check(response, data)
@@ -106,21 +132,165 @@ actor ServerClient {
         guard started == generation else { throw ServerError.accountReset }
         let session = Session(
             accessToken: auth.access_token, refreshToken: auth.refresh_token,
-            expiresAt: Date.now.addingTimeInterval(auth.expires_in), userID: auth.user.id
+            expiresAt: Date.now.addingTimeInterval(auth.expires_in), userID: auth.user.id,
+            isAnonymous: auth.user.is_anonymous ?? true
         )
         self.session = session
         Keychain.save(session)
         return session
     }
 
-    /// Forgets this phone's guest account (used by "Reset test data").
+    /// Forgets this phone's account (used by "Reset test data" and after deleting the account).
+    /// The next request starts a new guest account.
     func signOut() {
         generation += 1
         session = nil
         Keychain.delete()
+        appleSignInLost = false
         AttestKeyStore.delete()
         attestStatus = .notChecked
         attestRetryAfter = nil
+    }
+
+    // MARK: Sign in with Apple
+
+    /// How this phone is signed in.
+    enum Account: Equatable {
+        case guest
+        case apple
+        /// Signed in with Apple, but the sign-in ran out: sign in again to carry on.
+        case appleSignInLost
+    }
+
+    func account() -> Account {
+        if appleSignInLost { return .appleSignInLost }
+        return session?.isAnonymous == false ? .apple : .guest
+    }
+
+    private struct IDTokenBody: Encodable {
+        let provider = "apple"
+        let id_token: String
+        let nonce: String
+        var link_identity: Bool? = nil
+    }
+
+    /// Adds the Apple ID to the current guest account, so everything on it is kept.
+    /// Returns false when that can't be done: the Apple ID already has its own account,
+    /// or there's no guest account to add it to.
+    func linkApple(idToken: String, nonce: String) async throws -> Bool {
+        guard !appleSignInLost else { return false }
+        let started = generation
+        let current = try await validSession()
+        guard current.isAnonymous != false else { return false }
+        do {
+            let linked = try await auth(path: "token?grant_type=id_token",
+                                        body: IDTokenBody(id_token: idToken, nonce: nonce, link_identity: true),
+                                        bearer: current.accessToken)
+            guard linked.user.id == current.userID else {
+                // Not expected, but never mix two accounts' data.
+                throw ServerError.http(409, "linked to a different account")
+            }
+            var session = try store(linked, started: started)
+            if session.isAnonymous != false {
+                session.isAnonymous = false
+                self.session = session
+                Keychain.save(session)
+            }
+            return true
+        } catch ServerError.http(let code, let text)
+            where code == 422 && (text.contains("identity_already_exists") || text.contains("email_exists")) {
+            return false
+        }
+    }
+
+    /// Signs in to the Apple ID's own account and reads its saved progress. Only once both have
+    /// worked does the phone leave its current account, so a failure leaves everything as it was.
+    func signInWithApple(idToken: String, nonce: String) async throws -> (playerID: String, progress: SavedProgress) {
+        let started = generation
+        let answer = try await auth(path: "token?grant_type=id_token", body: IDTokenBody(id_token: idToken, nonce: nonce))
+        let next = Session(
+            accessToken: answer.access_token, refreshToken: answer.refresh_token,
+            expiresAt: Date.now.addingTimeInterval(answer.expires_in), userID: answer.user.id, isAnonymous: false
+        )
+        let progress = try await savedProgress(as: next)
+        guard started == generation else { throw ServerError.accountReset }
+        // Now switch: requests still running for the old account are dropped.
+        generation += 1
+        session = next
+        Keychain.save(next)
+        appleSignInLost = false
+        if AttestKeyStore.load()?.playerID != next.userID {
+            AttestKeyStore.delete()
+            attestStatus = .notChecked
+            attestRetryAfter = nil
+        }
+        return (next.userID, progress)
+    }
+
+    /// Deletes the account on the server: ratings, check-ins, friends and receipt photos.
+    /// Then this phone starts over as a new guest.
+    func deleteAccount() async throws {
+        guard let config else { throw ServerError.notConfigured }
+        let session = try await validSession()
+        var request = URLRequest(url: URL(string: "functions/v1/account", relativeTo: config.url)!)
+        request.httpMethod = "POST"
+        request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["action": "delete"])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.check(response, data)
+        signOut()
+    }
+
+    // MARK: Restoring an account on this phone
+
+    struct SavedRating: Decodable {
+        let id: UUID
+        let place_id: String
+        let verdict: String
+        let stars: Int
+        let rated_at: String
+        let storefront_photo: Bool
+        let pending: [String]
+        let rejected: Bool
+        let typed_business: String?
+        let typed_date: String?
+        let receipt_printed_at: String?
+        let receipt_number: String?
+        let receipt_date: String?
+        let delivery: Bool
+    }
+
+    struct SavedCheckIn: Decodable {
+        let id: UUID
+        let place_id: String
+        let checked_at: String
+        let latitude: Double
+        let longitude: Double
+        let accuracy: Double
+    }
+
+    /// Everything the server has for this account: team, ratings and check-ins.
+    struct SavedProgress {
+        let team: String?
+        let ratings: [SavedRating]
+        let checkIns: [SavedCheckIn]
+        var isEmpty: Bool { team == nil && ratings.isEmpty && checkIns.isEmpty }
+    }
+
+    /// Everything the server has for an account: team, ratings and check-ins.
+    private func savedProgress(as session: Session) async throws -> SavedProgress {
+        struct Player: Decodable { let team: String? }
+        let players: [Player] = try await get("players?select=team", as: session)
+        let ratings: [SavedRating] = try await get(
+            "ratings?select=id,place_id,verdict,stars,rated_at,storefront_photo,pending,rejected,typed_business,"
+            + "typed_date,receipt_printed_at,receipt_number,receipt_date,delivery&order=rated_at", as: session
+        )
+        let checkIns: [SavedCheckIn] = try await get(
+            "check_ins?select=id,place_id,checked_at,latitude,longitude,accuracy&order=checked_at", as: session
+        )
+        return SavedProgress(team: players.first?.team, ratings: ratings, checkIns: checkIns)
     }
 
     // MARK: Data
@@ -510,10 +680,11 @@ actor ServerClient {
         return (areas, places)
     }
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
+    private func get<T: Decodable>(_ path: String, as fixed: Session? = nil) async throws -> T {
         guard let config else { throw ServerError.notConfigured }
         let started = generation
-        let session = try await validSession()
+        let session: Session
+        if let fixed { session = fixed } else { session = try await validSession() }
         var request = URLRequest(url: URL(string: "rest/v1/\(path)", relativeTo: config.url)!)
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")

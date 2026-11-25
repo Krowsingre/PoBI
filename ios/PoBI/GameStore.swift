@@ -40,6 +40,8 @@ final class GameStore: ObservableObject {
     private var accountGeneration = 0
     /// The server account that `synced` refers to.
     private var syncedPlayerID: String?
+    /// Guest, or signed in with Apple.
+    @Published private(set) var account: ServerClient.Account = .guest
 
     /// Used when the phone's location isn't known yet: central New Jersey.
     static let defaultCenter = CLLocationCoordinate2D(latitude: 40.22, longitude: -74.55)
@@ -79,6 +81,7 @@ final class GameStore: ObservableObject {
             let catalog = await Task.detached(priority: .userInitiated) { PlaceCatalog.loadBundled() }.value
             self.catalog = catalog
             self.catalogLoaded = true
+            self.account = await ServerClient.shared.account()
             await self.sync()
         }
     }
@@ -271,6 +274,7 @@ final class GameStore: ObservableObject {
         placeOwners = [:]
         ownersFetchedAt = nil
         syncedPlayerID = nil
+        account = .guest
         accountGeneration += 1
         syncState = ServerClient.shared.isConfigured ? .idle : .notConfigured
         // A fresh guest account, so the server's copy of the old ratings doesn't block re-rating.
@@ -281,13 +285,107 @@ final class GameStore: ObservableObject {
         team = nil
     }
 
+    // MARK: Account
+
+    enum AppleSignInResult {
+        /// The Apple ID now signs in to this phone's account; nothing changed on the phone.
+        case linked
+        /// This phone switched to the Apple ID's existing account and shows its ratings.
+        case switched
+        /// The Apple ID has (or may have) its own account; switching would replace this phone's progress.
+        case needsConfirmation
+    }
+
+    /// Signs in with Apple. A guest's progress is kept by adding the Apple ID to the guest account.
+    /// If the Apple ID already has an account (for example, from another iPhone), the phone switches
+    /// to it, but only with `replaceThisPhone`, since this phone's own progress is then left behind.
+    func signInWithApple(idToken: String, nonce: String, replaceThisPhone: Bool) async throws -> AppleSignInResult {
+        let server = ServerClient.shared
+        let lost = await server.account() == .appleSignInLost
+        if !lost, try await server.linkApple(idToken: idToken, nonce: nonce) {
+            account = .apple
+            Task { await sync() }
+            return .linked
+        }
+        if !lost && !replaceThisPhone && (!ratings.isEmpty || !checkIns.isEmpty) {
+            return .needsConfirmation
+        }
+        // Nothing on the phone changes until the sign-in and the account's progress have both arrived.
+        let (playerID, saved) = try await server.signInWithApple(idToken: idToken, nonce: nonce)
+        accountGeneration += 1
+        account = .apple
+        if playerID == syncedPlayerID || saved.isEmpty {
+            // The same account signed in again (the sign-in had run out), or a brand-new account,
+            // which this phone's progress goes to (sync sends everything).
+            await sync()
+            return .linked
+        }
+        ratings = saved.ratings.compactMap(Self.rating(from:))
+        checkIns = saved.checkIns.compactMap(Self.checkIn(from:))
+        synced = Set(ratings.map(\.id) + checkIns.map(\.id))
+        refused = [:]
+        syncedPlayerID = playerID
+        areaOwners = []
+        placeOwners = [:]
+        ownersFetchedAt = nil
+        // Photos and receipts on this phone belonged to the other account.
+        try? FileManager.default.removeItem(at: Self.photosDirectory)
+        try? FileManager.default.removeItem(at: Self.receiptsDirectory)
+        team = saved.team.flatMap(Team.init(rawValue:))
+        return .switched
+    }
+
+    /// Deletes the account and everything on the server, then clears this phone.
+    func deleteAccount() async throws {
+        try await ServerClient.shared.deleteAccount()
+        reset()
+    }
+
+    nonisolated private static func timestamp(_ text: String?) -> Date? {
+        guard var text else { return nil }
+        // Postgres sends microseconds ("...:56.123456+00:00"); the formatter needs whole seconds.
+        text = text.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        return ISO8601DateFormatter().date(from: text)
+    }
+
+    nonisolated private static func day(_ text: String?) -> Date? {
+        guard let text else { return nil }
+        return try? Date(text, strategy: dayFormat)
+    }
+
+    nonisolated private static func rating(from saved: ServerClient.SavedRating) -> Rating? {
+        guard let verdict = Verdict(rawValue: saved.verdict), let date = timestamp(saved.rated_at) else { return nil }
+        let reasons = saved.pending.compactMap(PendingReason.init(rawValue:))
+        let typed = saved.typed_business.flatMap { business in
+            day(saved.typed_date).map { TypedReceipt(business: business, date: $0) }
+        }
+        var rating = Rating(
+            id: saved.id, placeID: saved.place_id, verdict: verdict, stars: saved.stars, date: date,
+            storefrontPhoto: saved.storefront_photo ? true : nil,
+            pending: reasons.isEmpty ? nil : reasons,
+            typedReceipt: typed,
+            receiptPrintedAt: timestamp(saved.receipt_printed_at),
+            receiptNumber: saved.receipt_number,
+            receiptDate: day(saved.receipt_date),
+            rejected: saved.rejected ? true : nil
+        )
+        rating.delivery = saved.delivery ? true : nil
+        return rating
+    }
+
+    nonisolated private static func checkIn(from saved: ServerClient.SavedCheckIn) -> CheckIn? {
+        guard let date = timestamp(saved.checked_at) else { return nil }
+        return CheckIn(id: saved.id, placeID: saved.place_id, date: date,
+                       latitude: saved.latitude, longitude: saved.longitude, accuracy: saved.accuracy)
+    }
+
     // MARK: Game server
 
     var unsyncedCount: Int {
         ratings.filter { !synced.contains($0.id) }.count + checkIns.filter { !synced.contains($0.id) }.count
     }
 
-    private static let dayFormat: Date.ISO8601FormatStyle = {
+    nonisolated private static let dayFormat: Date.ISO8601FormatStyle = {
         var style = Date.ISO8601FormatStyle(timeZone: calendar.timeZone)
         style = style.year().month().day()
         return style
@@ -373,6 +471,11 @@ final class GameStore: ObservableObject {
             await refreshOwners(force: true)
         } catch ServerClient.ServerError.accountReset {
             return
+        } catch ServerClient.ServerError.signInAgain {
+            guard generation == accountGeneration else { return }
+            account = .appleSignInLost
+            save()
+            syncState = .failed(ServerClient.ServerError.signInAgain.localizedDescription)
         } catch {
             guard generation == accountGeneration else { return }
             save()

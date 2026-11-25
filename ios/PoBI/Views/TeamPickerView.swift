@@ -36,6 +36,15 @@ struct TeamPickerView: View {
                     .buttonStyle(.plain)
                 }
             }
+            if ServerClient.shared.isConfigured {
+                VStack(spacing: 8) {
+                    Text("Already playing on another iPhone?")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    AppleSignInButton()
+                }
+                .padding(.top, 8)
+            }
             Spacer()
         }
         .padding()
