@@ -35,6 +35,11 @@ targets:
             LSHandlerRank: Alternate
             LSItemContentTypes: [com.adobe.pdf, public.image, public.email-message, com.apple.mail.email, public.html, public.plain-text]
         LSSupportsOpeningDocumentsInPlace: false
+    entitlements:
+      path: PoBI/PoBI.entitlements
+      properties:
+        # Sign in with Apple. The archive is built unsigned, so CI signs these in before export.
+        com.apple.developer.applesignin: [Default]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.krowsingre.pobi
