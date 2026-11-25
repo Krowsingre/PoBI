@@ -23,16 +23,33 @@ function admin(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${SUPABASE_URL}/${path}`, { ...init, headers });
 }
 
-/** The signed-in player, as the sign-in server sees the token (not just its claims). */
-async function playerFrom(req: Request): Promise<string | undefined> {
+/** The player ID in a token's claims. The platform checks the token's signature before this
+ *  function runs (functions are deployed with JWT verification on). */
+function subject(authorization: string): string | undefined {
+  try {
+    const claims = JSON.parse(atob(authorization.replace(/^Bearer /, "").split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return claims.role === "authenticated" && typeof claims.sub === "string" ? claims.sub : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The signed-in player, as the sign-in server sees the token (not just its claims).
+ *  `gone` is set when the token is genuine but its account was already deleted, so a retry
+ *  after a lost answer can still finish. */
+async function playerFrom(req: Request): Promise<{ id: string; gone: boolean } | undefined> {
   const authorization = req.headers.get("Authorization");
   if (!authorization) return undefined;
   const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     headers: { apikey: ANON_KEY, Authorization: authorization },
   });
-  if (!res.ok) return undefined;
+  if (!res.ok) {
+    const body = await res.text();
+    const id = subject(authorization);
+    return body.includes("user_not_found") && id ? { id, gone: true } : undefined;
+  }
   const user = await res.json();
-  return typeof user?.id === "string" ? user.id : undefined;
+  return typeof user?.id === "string" ? { id: user.id, gone: false } : undefined;
 }
 
 /** Deletes every file under "<player>/" in the receipts bucket. */
@@ -70,8 +87,9 @@ export async function handle(req: Request): Promise<Response> {
   try {
     switch (input.action) {
       case "delete": {
-        await deleteReceipts(player);
-        const res = await admin(`auth/v1/admin/users/${player}`, { method: "DELETE" });
+        await deleteReceipts(player.id);
+        if (player.gone) return json(200, { ok: true });
+        const res = await admin(`auth/v1/admin/users/${player.id}`, { method: "DELETE" });
         // Already gone counts as done, so a retry after a dropped answer succeeds.
         if (!res.ok && res.status !== 404) return json(502, { message: `deleting the account: HTTP ${res.status}` });
         return json(200, { ok: true });

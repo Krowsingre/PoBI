@@ -8,6 +8,7 @@ Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "service");
 const { handle } = await import("./handler.ts");
 
 const player = "11111111-1111-1111-1111-111111111111";
+const good = `x.${btoa(JSON.stringify({ sub: player, role: "authenticated" })).replace(/=+$/, "")}.y`;
 let files: string[] = [];
 let users: string[] = [];
 const calls: string[] = [];
@@ -17,7 +18,10 @@ globalThis.fetch = (async (input: string | URL | Request, init: RequestInit = {}
   const headers = new Headers(init.headers);
   calls.push(`${init.method ?? "GET"} ${url.replace("https://db.test/", "")}`);
   if (url.endsWith("/auth/v1/user")) {
-    return headers.get("Authorization") === "Bearer good" ? Response.json({ id: player }) : new Response(null, { status: 401 });
+    if (headers.get("Authorization") !== `Bearer ${good}`) return new Response(null, { status: 401 });
+    return users.includes(player)
+      ? Response.json({ id: player })
+      : Response.json({ code: 403, error_code: "user_not_found" }, { status: 403 });
   }
   if (headers.get("Authorization") !== "Bearer service") return new Response(null, { status: 403 });
   if (url.endsWith("/storage/v1/object/list/receipts")) {
@@ -39,7 +43,7 @@ globalThis.fetch = (async (input: string | URL | Request, init: RequestInit = {}
   return new Response("unexpected " + url, { status: 500 });
 }) as typeof fetch;
 
-function call(body: unknown, token = "good"): Promise<Response> {
+function call(body: unknown, token = good): Promise<Response> {
   return handle(new Request("https://fn.test", {
     method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
   }));
@@ -56,9 +60,11 @@ Deno.test("delete removes only the player's receipts, then the account", async (
   assertEquals(calls.at(-1), `DELETE auth/v1/admin/users/${player}`);
 });
 
-Deno.test("deleting twice still succeeds", async () => {
+Deno.test("a retry after the account is gone still succeeds and clears leftover receipts", async () => {
+  files = [`${player}/late.jpg`];
   const res = await call({ action: "delete" });
   assertEquals(res.status, 200);
+  assertEquals(files, []);
 });
 
 Deno.test("a bad token deletes nothing", async () => {

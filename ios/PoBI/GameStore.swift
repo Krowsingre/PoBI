@@ -310,19 +310,13 @@ final class GameStore: ObservableObject {
         if !lost && !replaceThisPhone && (!ratings.isEmpty || !checkIns.isEmpty) {
             return .needsConfirmation
         }
+        // Nothing on the phone changes until the sign-in and the account's progress have both arrived.
+        let (playerID, saved) = try await server.signInWithApple(idToken: idToken, nonce: nonce)
         accountGeneration += 1
-        let generation = accountGeneration
-        let playerID = try await server.signInWithApple(idToken: idToken, nonce: nonce)
         account = .apple
-        if playerID == syncedPlayerID {
-            // Signing in again to the same account (the sign-in had run out).
-            await sync()
-            return .linked
-        }
-        let saved = try await server.savedProgress()
-        guard generation == accountGeneration else { throw ServerClient.ServerError.accountReset }
-        if saved.team == nil && saved.ratings.isEmpty && saved.checkIns.isEmpty {
-            // A brand-new account: this phone's progress goes to it (sync sends everything).
+        if playerID == syncedPlayerID || saved.isEmpty {
+            // The same account signed in again (the sign-in had run out), or a brand-new account,
+            // which this phone's progress goes to (sync sends everything).
             await sync()
             return .linked
         }

@@ -85,6 +85,9 @@ code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/functions/v1/accoun
 code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/functions/v1/account" \
   -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{"action":"delete"}')
 expect "delete own account" 200 "$code"
+code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/functions/v1/account" \
+  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{"action":"delete"}')
+expect "deleting again (a retry after a lost answer) still succeeds" 200 "$code"
 gone=$(curl -sS -o /dev/null -w "%{http_code}" "$base/auth/v1/admin/users/$uid" -H "apikey: $service" -H "Authorization: Bearer $service")
 expect "account is gone" 404 "$gone"
 left=$(curl -sS "$base/rest/v1/ratings?select=id&player_id=eq.$uid" -H "apikey: $service" -H "Authorization: Bearer $service" | jq length)

@@ -203,22 +203,28 @@ actor ServerClient {
         }
     }
 
-    /// Signs in to the Apple ID's own account, leaving the current one. Returns its player ID.
-    func signInWithApple(idToken: String, nonce: String) async throws -> String {
-        generation += 1
+    /// Signs in to the Apple ID's own account and reads its saved progress. Only once both have
+    /// worked does the phone leave its current account, so a failure leaves everything as it was.
+    func signInWithApple(idToken: String, nonce: String) async throws -> (playerID: String, progress: SavedProgress) {
         let started = generation
-        session = nil
-        Keychain.delete()
-        AttestKeyStore.delete()
-        attestStatus = .notChecked
-        attestRetryAfter = nil
-        var session = try store(await auth(path: "token?grant_type=id_token",
-                                           body: IDTokenBody(id_token: idToken, nonce: nonce)), started: started)
-        session.isAnonymous = false
-        self.session = session
-        Keychain.save(session)
+        let answer = try await auth(path: "token?grant_type=id_token", body: IDTokenBody(id_token: idToken, nonce: nonce))
+        let next = Session(
+            accessToken: answer.access_token, refreshToken: answer.refresh_token,
+            expiresAt: Date.now.addingTimeInterval(answer.expires_in), userID: answer.user.id, isAnonymous: false
+        )
+        let progress = try await savedProgress(as: next)
+        guard started == generation else { throw ServerError.accountReset }
+        // Now switch: requests still running for the old account are dropped.
+        generation += 1
+        session = next
+        Keychain.save(next)
         appleSignInLost = false
-        return session.userID
+        if AttestKeyStore.load()?.playerID != next.userID {
+            AttestKeyStore.delete()
+            attestStatus = .notChecked
+            attestRetryAfter = nil
+        }
+        return (next.userID, progress)
     }
 
     /// Deletes the account on the server: ratings, check-ins, friends and receipt photos.
@@ -266,17 +272,25 @@ actor ServerClient {
     }
 
     /// Everything the server has for this account: team, ratings and check-ins.
-    func savedProgress() async throws -> (team: String?, ratings: [SavedRating], checkIns: [SavedCheckIn]) {
+    struct SavedProgress {
+        let team: String?
+        let ratings: [SavedRating]
+        let checkIns: [SavedCheckIn]
+        var isEmpty: Bool { team == nil && ratings.isEmpty && checkIns.isEmpty }
+    }
+
+    /// Everything the server has for an account: team, ratings and check-ins.
+    private func savedProgress(as session: Session) async throws -> SavedProgress {
         struct Player: Decodable { let team: String? }
-        let players: [Player] = try await get("players?select=team")
+        let players: [Player] = try await get("players?select=team", as: session)
         let ratings: [SavedRating] = try await get(
             "ratings?select=id,place_id,verdict,stars,rated_at,storefront_photo,pending,rejected,typed_business,"
-            + "typed_date,receipt_printed_at,receipt_number,receipt_date,delivery&order=rated_at"
+            + "typed_date,receipt_printed_at,receipt_number,receipt_date,delivery&order=rated_at", as: session
         )
         let checkIns: [SavedCheckIn] = try await get(
-            "check_ins?select=id,place_id,checked_at,latitude,longitude,accuracy&order=checked_at"
+            "check_ins?select=id,place_id,checked_at,latitude,longitude,accuracy&order=checked_at", as: session
         )
-        return (players.first?.team, ratings, checkIns)
+        return SavedProgress(team: players.first?.team, ratings: ratings, checkIns: checkIns)
     }
 
     // MARK: Data
@@ -666,10 +680,11 @@ actor ServerClient {
         return (areas, places)
     }
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
+    private func get<T: Decodable>(_ path: String, as fixed: Session? = nil) async throws -> T {
         guard let config else { throw ServerError.notConfigured }
         let started = generation
-        let session = try await validSession()
+        let session: Session
+        if let fixed { session = fixed } else { session = try await validSession() }
         var request = URLRequest(url: URL(string: "rest/v1/\(path)", relativeTo: config.url)!)
         request.setValue(config.anonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
