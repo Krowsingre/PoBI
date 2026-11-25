@@ -24,9 +24,11 @@ struct DigitalReceipt: Equatable {
         let type = UTType(filenameExtension: url.pathExtension) ?? .data
 
         if type.conforms(to: .pdf) {
-            guard let pdf = PDFDocument(url: url), let first = pdf.page(at: 0) else { throw LoadError.unreadable }
-            let image = first.thumbnail(of: CGSize(width: 1600, height: 1600 * 1.5), for: .mediaBox)
-            let text = (0..<min(pdf.pageCount, 3)).compactMap { pdf.page(at: $0)?.string }.joined(separator: "\n")
+            guard let pdf = PDFDocument(url: url), pdf.pageCount > 0 else { throw LoadError.unreadable }
+            // The same pages are read and shown to the reviewer, so the evidence matches what was checked.
+            let pages = (0..<min(pdf.pageCount, 3)).compactMap { pdf.page(at: $0) }
+            let image = stack(pages.map { $0.thumbnail(of: CGSize(width: 1200, height: 1800), for: .mediaBox) })
+            let text = pages.compactMap(\.string).joined(separator: "\n")
             // A scanned PDF has no text layer: read the page like a photo.
             let lines = clean(text)
             return DigitalReceipt(lines: lines.isEmpty ? await ReceiptReader.recognizeText(in: image) : lines, image: image)
@@ -37,17 +39,33 @@ struct DigitalReceipt: Equatable {
         }
         guard let data = try? Data(contentsOf: url) else { throw LoadError.unreadable }
         let raw = String(decoding: data, as: UTF8.self)
-        let text: String
         if type.conforms(to: .emailMessage) || url.pathExtension.lowercased() == "eml" {
-            text = EmailText.readable(raw)
-        } else if type.conforms(to: .html) {
-            text = EmailText.stripHTML(raw)
-        } else {
-            text = raw
+            // Only the email's body is checked: a recent email can carry an old receipt, so its
+            // Date header must not count as the receipt's date. The reviewer still sees the headers.
+            let email = EmailText.parse(raw)
+            let lines = clean(email.body)
+            guard !lines.isEmpty else { throw LoadError.unreadable }
+            return DigitalReceipt(lines: lines, image: render(email.headers + [""] + lines))
         }
-        let lines = clean(text)
+        let lines = clean(type.conforms(to: .html) ? EmailText.stripHTML(raw) : raw)
         guard !lines.isEmpty else { throw LoadError.unreadable }
         return DigitalReceipt(lines: lines, image: render(lines))
+    }
+
+    /// Puts PDF pages one under another, so a multi-page receipt is one image for review.
+    static func stack(_ pages: [UIImage]) -> UIImage {
+        guard pages.count > 1 else { return pages.first ?? UIImage() }
+        let width = pages.map(\.size.width).max() ?? 0
+        let height = pages.map(\.size.height).reduce(0, +)
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            var y: CGFloat = 0
+            for page in pages {
+                page.draw(at: CGPoint(x: 0, y: y))
+                y += page.size.height
+            }
+        }
     }
 
     static func clean(_ text: String) -> [String] {
@@ -76,15 +94,12 @@ struct DigitalReceipt: Equatable {
 
 /// Just enough email parsing to get a receipt's text out of a saved .eml file.
 enum EmailText {
-    static func readable(_ raw: String) -> String {
+    /// The From, Subject and Date lines (for the reviewer), and the readable body (for the checks).
+    static func parse(_ raw: String) -> (headers: [String], body: String) {
         let message = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let (headers, body) = split(message)
-        var lines: [String] = []
-        for name in ["From", "Subject", "Date"] {
-            if let value = header(name, in: headers) { lines.append("\(name): \(value)") }
-        }
-        lines.append(text(of: headers, body: body))
-        return lines.joined(separator: "\n")
+        let shown = ["From", "Subject", "Date"].compactMap { name in header(name, in: headers).map { "\(name): \($0)" } }
+        return (shown, text(of: headers, body: body))
     }
 
     /// Splits a message or MIME part at the first blank line.
