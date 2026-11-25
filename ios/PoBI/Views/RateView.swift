@@ -74,7 +74,12 @@ struct RateView: View {
         return TypedReceipt(business: business, date: typedDate)
     }
 
-    private var hasPhoto: Bool { dishImage != nil && store.draft(for: place) != nil }
+    /// A delivery photo (taken away from the place) only counts while "Delivery order" is on.
+    private var usableDraft: PhotoDraft? {
+        guard let draft = store.draft(for: place), draft.delivery != true || delivery else { return nil }
+        return draft
+    }
+    private var hasPhoto: Bool { dishImage != nil && usableDraft != nil }
     private var skippingPhoto: Bool { forgotPhoto && !hasPhoto && !delivery }
     private var willBePending: Bool { typedReceipt != nil || skippingPhoto || digital }
 
@@ -132,7 +137,8 @@ struct RateView: View {
                 }
 
                 Section {
-                    if let draft = store.draft(for: place), let dishImage {
+                    if let draft = usableDraft, let dishImage {
+                        Toggle("Delivery order", isOn: $delivery)
                         Image(uiImage: dishImage)
                             .resizable()
                             .scaledToFit()
