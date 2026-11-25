@@ -129,14 +129,18 @@ final class GameStore: ObservableObject {
 
     /// Saves a food or storefront photo taken at the place. It's kept for 7 days so you can
     /// finish the rating after you leave (D17).
-    func savePhotoDraft(_ photo: UIImage, for place: Place, storefront: Bool, from here: CLLocation?) throws {
-        guard presence(at: place, from: here) == .allowed, let here else { throw GameError.photoNotAtPlace }
+    func savePhotoDraft(_ photo: UIImage, for place: Place, storefront: Bool, from here: CLLocation?, delivery: Bool = false) throws {
+        // A delivery order's food photo is taken wherever it was delivered.
+        if !delivery {
+            guard presence(at: place, from: here) == .allowed, here != nil else { throw GameError.photoNotAtPlace }
+        }
         guard let data = photo.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
         try FileManager.default.createDirectory(at: Self.draftsDirectory, withIntermediateDirectories: true)
         try data.write(to: Self.draftURL(for: place.id))
         drafts[place.id] = PhotoDraft(
             placeID: place.id, takenAt: .now, storefront: storefront,
-            distance: here.distance(from: place.location)
+            distance: here.map { $0.distance(from: place.location) } ?? -1,
+            delivery: delivery ? true : nil
         )
         save()
     }
@@ -165,7 +169,7 @@ final class GameStore: ObservableObject {
     func rate(
         _ place: Place, verdict: Verdict, stars: Int,
         receiptPhoto: UIImage? = nil, typedReceipt: TypedReceipt? = nil, withoutPhoto: Bool = false,
-        digitalReceipt: Bool = false,
+        digitalReceipt: Bool = false, delivery: Bool = false,
         receiptPrintedAt: Date? = nil, receiptNumber: String? = nil, receiptDate: Date? = nil
     ) throws {
         guard rating(for: place) == nil else { throw GameError.alreadyRated }
@@ -179,6 +183,8 @@ final class GameStore: ObservableObject {
         } else {
             guard let draft = draft(for: place), let photo = draftPhoto(for: place),
                   let data = photo.jpegData(compressionQuality: 0.7) else { throw GameError.missingPhotos }
+            // A photo taken away from the place only works for a delivery rating (D17).
+            if draft.delivery == true && !delivery { throw GameError.photoNotAtPlace }
             photoData = data
             storefront = draft.storefront
         }
@@ -196,7 +202,8 @@ final class GameStore: ObservableObject {
             typedReceipt: typedReceipt,
             receiptPrintedAt: typedReceipt == nil ? receiptPrintedAt : nil,
             receiptNumber: typedReceipt == nil ? receiptNumber : nil,
-            receiptDate: typedReceipt == nil ? receiptDate : nil
+            receiptDate: typedReceipt == nil ? receiptDate : nil,
+            delivery: delivery ? true : nil
         )
         if let photoData {
             try FileManager.default.createDirectory(at: Self.photosDirectory, withIntermediateDirectories: true)
@@ -331,7 +338,8 @@ final class GameStore: ObservableObject {
                     typed_date: rating.typedReceipt.map { $0.date.formatted(Self.dayFormat) },
                     receipt_printed_at: rating.receiptPrintedAt,
                     receipt_number: rating.receiptNumber,
-                    receipt_date: rating.receiptDate.map { $0.formatted(Self.dayFormat) }
+                    receipt_date: rating.receiptDate.map { $0.formatted(Self.dayFormat) },
+                    delivery: rating.delivery ?? false
                 ))
                 guard generation == accountGeneration else { return }
                 synced.insert(rating.id)

@@ -235,6 +235,18 @@ insert into expect select 'a digital receipt is in the review queue',
   (select count(*) = 1 from review_queue() where id = '99999999-9999-9999-9999-999999999999');
 reset role;
 
+-- Delivery ratings: stored, shown in the place's ratings (the runner leaves them out of territory).
+insert into places values ('p10', 41.1, -75.1, '882a10000ffffff');
+set role authenticated;
+set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+insert into ratings (id, place_id, latitude, longitude, verdict, stars, delivery)
+  values (gen_random_uuid(), 'p10', 0, 0, 'plateIt', 3, true);
+insert into expect select 'a delivery rating is saved and counts as a rating',
+  (select delivery and counted_at is not null from ratings where place_id = 'p10');
+insert into expect select 'a delivery rating shows in the place''s overall',
+  (select (place_ratings('p10') -> 'overall' ->> 'plate')::int = 1);
+reset role;
+
 select name, ok from expect;
 do $$ begin
   if exists (select 1 from expect where not ok) then raise exception 'A rules check failed'; end if;

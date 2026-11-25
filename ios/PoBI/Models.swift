@@ -105,6 +105,9 @@ struct Rating: Identifiable, Codable, Hashable {
     var receiptDate: Date? = nil
     /// A reviewer turned this rating down. It never counts.
     var rejected: Bool? = nil
+    /// A delivery order (Grubhub, DoorDash...): the food photo can be taken anywhere, and the
+    /// rating shows in the place's ratings but doesn't count toward territory.
+    var delivery: Bool? = nil
 
     var isPending: Bool { !(pending ?? []).isEmpty || rejected == true }
 
@@ -171,6 +174,8 @@ struct PhotoDraft: Codable, Hashable {
     let storefront: Bool
     /// Distance from the place's pin when the photo was taken, in metres.
     let distance: Double
+    /// Taken for a delivery order, away from the place. Can't be used for an in-person rating.
+    var delivery: Bool? = nil
 }
 
 struct CheckIn: Identifiable, Codable, Hashable {

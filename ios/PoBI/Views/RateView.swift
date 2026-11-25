@@ -34,6 +34,8 @@ struct RateView: View {
     @State private var dishImage: UIImage?
     /// The place doesn't allow food photos, so a photo of the outside or sign stands in (D16).
     @State private var noPhotosAllowed = false
+    /// Delivered food (Grubhub, DoorDash...): photo anywhere, rating only, no territory.
+    @State private var delivery = false
     /// The app couldn't read the receipt, so the player types the business and date (D18).
     @State private var typingReceipt = false
     @State private var typedBusiness = ""
@@ -72,8 +74,13 @@ struct RateView: View {
         return TypedReceipt(business: business, date: typedDate)
     }
 
-    private var hasPhoto: Bool { dishImage != nil && store.draft(for: place) != nil }
-    private var skippingPhoto: Bool { forgotPhoto && !hasPhoto }
+    /// A delivery photo (taken away from the place) only counts while "Delivery order" is on.
+    private var usableDraft: PhotoDraft? {
+        guard let draft = store.draft(for: place), draft.delivery != true || delivery else { return nil }
+        return draft
+    }
+    private var hasPhoto: Bool { dishImage != nil && usableDraft != nil }
+    private var skippingPhoto: Bool { forgotPhoto && !hasPhoto && !delivery }
     private var willBePending: Bool { typedReceipt != nil || skippingPhoto || digital }
 
     private var canSubmit: Bool {
@@ -130,26 +137,44 @@ struct RateView: View {
                 }
 
                 Section {
-                    if let draft = store.draft(for: place), let dishImage {
+                    if let draft = usableDraft, let dishImage {
+                        Toggle("Delivery order", isOn: $delivery)
                         Image(uiImage: dishImage)
                             .resizable()
                             .scaledToFit()
                             .frame(maxHeight: 200)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                         Label(
-                            "\(draft.storefront ? "Storefront" : "Food") photo taken here \(draft.takenAt.formatted(.relative(presentation: .named)))",
+                            draft.delivery == true
+                                ? "Delivery food photo taken \(draft.takenAt.formatted(.relative(presentation: .named)))"
+                                : "\(draft.storefront ? "Storefront" : "Food") photo taken here \(draft.takenAt.formatted(.relative(presentation: .named)))",
                             systemImage: "checkmark.circle.fill"
                         )
                         .foregroundStyle(.green)
                         // The saved photo is only replaced once a new one is taken at the place.
                         Button("Retake photo") { shooting = .dish }
-                            .disabled(!CameraPicker.isAvailable || presence != .allowed || checkingPhoto)
+                            .disabled(!CameraPicker.isAvailable || (!delivery && presence != .allowed) || checkingPhoto)
+                    } else if delivery {
+                        Toggle("Delivery order", isOn: $delivery)
+                        Button {
+                            shooting = .dish
+                        } label: {
+                            Label("Take food photo", systemImage: "camera")
+                        }
+                        .disabled(!CameraPicker.isAvailable || checkingPhoto)
+                        if checkingPhoto {
+                            HStack {
+                                ProgressView()
+                                Text("Checking the photo…").foregroundStyle(.secondary)
+                            }
+                        }
                     } else if forgotPhoto {
                         Toggle("I left without taking it", isOn: $forgotPhoto)
                         Text("Your rating will be pending. It counts once you check in here within \(Rating.revisitDays) days, or once the receipt passes a review.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } else {
+                        Toggle("Delivery order", isOn: $delivery)
                         Toggle("No photos allowed inside", isOn: $noPhotosAllowed)
                         Button {
                             shooting = .dish
@@ -176,7 +201,9 @@ struct RateView: View {
                 } header: {
                     Text(noPhotosAllowed ? "The place" : "Your food")
                 } footer: {
-                    Text(noPhotosAllowed
+                    Text(delivery
+                         ? "For food delivered by Grubhub, DoorDash and the like. Take the photo wherever you're eating. Delivery ratings show in the place's ratings but don't count toward territory."
+                         : noPhotosAllowed
                          ? "Photograph the outside or the sign, at the place. The rating counts the same."
                          : "Take this photo at the place. It's kept for 7 days, so you can finish the rating after you leave.")
                 }
@@ -221,6 +248,7 @@ struct RateView: View {
                 if let draft = store.draft(for: place) {
                     dishImage = store.draftPhoto(for: place)
                     noPhotosAllowed = draft.storefront
+                    delivery = draft.delivery == true
                 }
                 if typedBusiness.isEmpty { typedBusiness = place.name }
                 if let sharedReceipt, receiptCheck == nil, !checkingReceipt { checkDigital(sharedReceipt) }
@@ -306,7 +334,8 @@ struct RateView: View {
 
     private func saveDish(_ image: UIImage) {
         let photo = ImageResizer.downscale(image)
-        let storefront = noPhotosAllowed
+        let storefront = noPhotosAllowed && !delivery
+        let forDelivery = delivery
         checkingPhoto = true
         error = nil
         Task {
@@ -319,7 +348,7 @@ struct RateView: View {
                 return
             }
             do {
-                try store.savePhotoDraft(photo, for: place, storefront: storefront, from: location.location)
+                try store.savePhotoDraft(photo, for: place, storefront: storefront, from: location.location, delivery: forDelivery)
                 dishImage = photo
             } catch {
                 self.error = error.localizedDescription
@@ -379,6 +408,7 @@ struct RateView: View {
                 typedReceipt: receiptOK ? nil : typedReceipt,
                 withoutPhoto: skippingPhoto,
                 digitalReceipt: digital,
+                delivery: delivery,
                 receiptPrintedAt: receiptScan?.printedAt,
                 receiptNumber: receiptScan?.number,
                 receiptDate: { if case .valid(let day) = receiptScan?.date { return day } else { return nil } }()

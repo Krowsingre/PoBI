@@ -154,6 +154,7 @@ actor ServerClient {
         let receipt_printed_at: Date?
         let receipt_number: String?
         let receipt_date: String?
+        let delivery: Bool
     }
 
     struct RatingStatus: Decodable {
