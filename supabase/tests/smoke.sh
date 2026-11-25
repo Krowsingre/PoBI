@@ -77,3 +77,19 @@ expect "read own profile" 200 "$(rpc my_profile '{}')"
 jq -e '.[0].friend_code | length == 8' /tmp/out >/dev/null && echo "ok: has a friend code"
 expect "a place's player ratings" 200 "$(rpc place_ratings "{\"place\":\"$place_id\"}")"
 jq -e '.overall.plate >= 1' /tmp/out >/dev/null && echo "ok: the test rating shows in the place's overall" || { echo "FAIL: overall missing the rating"; cat /tmp/out; exit 1; }
+
+# Last: delete the account the way the app's "Delete account" button does.
+code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/functions/v1/account" \
+  -H "apikey: $anon" -H "Authorization: Bearer forged" -H "Content-Type: application/json" -d '{"action":"delete"}')
+[[ "$code" == 401 ]] && echo "ok: account deletion refuses a bad token" || { echo "FAIL: bad token got $code"; cat /tmp/out; exit 1; }
+code=$(curl -sS -o /tmp/out -w "%{http_code}" -X POST "$base/functions/v1/account" \
+  -H "apikey: $anon" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{"action":"delete"}')
+expect "delete own account" 200 "$code"
+gone=$(curl -sS -o /dev/null -w "%{http_code}" "$base/auth/v1/admin/users/$uid" -H "apikey: $service" -H "Authorization: Bearer $service")
+expect "account is gone" 404 "$gone"
+left=$(curl -sS "$base/rest/v1/ratings?select=id&player_id=eq.$uid" -H "apikey: $service" -H "Authorization: Bearer $service" | jq length)
+expect "ratings are gone" 0 "$left"
+files=$(curl -sS -X POST "$base/storage/v1/object/list/receipts" -H "apikey: $service" -H "Authorization: Bearer $service" \
+  -H "Content-Type: application/json" -d "{\"prefix\":\"$uid/\"}" | jq length)
+expect "receipt photos are gone" 0 "$files"
+uid=""

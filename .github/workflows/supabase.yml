@@ -37,8 +37,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Test the App Attest function
-        run: deno test --allow-env supabase/functions/attest/handler.test.ts
+      - name: Test the edge functions
+        run: deno test --allow-env supabase/functions/attest/handler.test.ts supabase/functions/account/handler.test.ts
 
   deploy:
     name: Apply to Supabase
@@ -85,18 +85,27 @@ jobs:
           if [ -z "$team" ]; then echo "::error::APPLE_TEAM_ID secret is empty"; exit 1; fi
           supabase secrets set --project-ref "$PROJECT_REF" --yes "APPLE_TEAM_ID=$team"
           supabase functions deploy attest --project-ref "$PROJECT_REF" --use-api --yes
-      - name: Turn on guest sign-in
-        # Players start as anonymous (guest) accounts, so the app needs no sign-up screen yet.
+      - name: Deploy the account function
+        # Deletes a player's account and receipt photos when they ask in the app.
+        if: github.event_name != 'pull_request'
+        run: supabase functions deploy account --project-ref "$PROJECT_REF" --use-api --yes
+      - name: Turn on guest and Apple sign-in
+        # Players start as anonymous (guest) accounts. Sign in with Apple links to the guest
+        # account (manual linking), so progress is kept. The app signs in with Apple's ID token,
+        # so no Apple secret key is needed; the client ID is the app's bundle ID.
         run: |
           curl -sS --fail-with-body -X PATCH \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{"external_anonymous_users_enabled": true}' > /dev/null
-          on=$(curl -sS --fail-with-body "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" | jq -r '.external_anonymous_users_enabled')
-          if [ "$on" != "true" ]; then echo "::error::Guest sign-in is still off (got $on)"; exit 1; fi
-          echo "Guest sign-in is on."
+            -d '{"external_anonymous_users_enabled": true, "external_apple_enabled": true, "external_apple_client_id": "com.krowsingre.pobi", "security_manual_linking_enabled": true}' > /dev/null
+          got=$(curl -sS --fail-with-body "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            | jq -c '{external_anonymous_users_enabled, external_apple_enabled, external_apple_client_id, security_manual_linking_enabled}')
+          echo "$got"
+          want='{"external_anonymous_users_enabled":true,"external_apple_enabled":true,"external_apple_client_id":"com.krowsingre.pobi","security_manual_linking_enabled":true}'
+          if [ "$got" != "$want" ]; then echo "::error::Sign-in settings didn't stick"; exit 1; fi
+          echo "Guest and Apple sign-in are on."
 
   places:
     name: Load the place catalogue
